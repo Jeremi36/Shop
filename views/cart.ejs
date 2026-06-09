@@ -1,0 +1,19 @@
+<%- include('layout-top') %>
+<h1>Warenkorb</h1>
+<% if (!items.length) { %><p>Dein Warenkorb ist leer.</p><% } else { %>
+<table><tr><th>Produkt</th><th>Sorte</th><th>Menge</th><th>Preis</th><th>Summe</th></tr><% items.forEach(i => { %><tr><td><%= i.name %></td><td><%= i.variant_name || '-' %></td><td><form method="post" action="/cart/update/<%= i.cart_id %>" class="inline"><input type="number" name="quantity" min="0" max="<%= i.stock %>" value="<%= i.quantity %>"><button>Ändern</button></form></td><td><%= money(discounted(i)) %></td><td><%= money(discounted(i)*i.quantity) %></td></tr><% }) %></table>
+<section class="panel">
+  <h2>Rabattcode</h2>
+  <% if (couponError) { %><p class="error"><%= couponError %></p><% } %>
+  <% if (couponSuccess) { %><p class="success"><%= couponSuccess %></p><% } %>
+  <% if (couponResult && couponResult.valid) { %>
+    <p><b>Aktiver Code:</b> <%= couponResult.code %> · Rabatt: <%= money(couponResult.discountCents) %></p>
+    <form method="post" action="/cart/coupon/remove"><button class="secondary">Rabattcode entfernen</button></form>
+  <% } else { %>
+    <form method="post" action="/cart/coupon" class="inline"><input name="code" placeholder="Rabattcode eingeben"><button>Anwenden</button></form>
+  <% } %>
+</section>
+<div class="notice"><b>Wichtiger Hinweis vor der Bestellung:</b><br>Diese Website ist keine Lieferwebsite und arbeitet nur in Amberg. Um Lieferkosten zu ersparen, werden alle Lieferungen von unseren Mitarbeitern an einem bestimmten Ort an dich übergeben. Weil im Moment digitale Zahlungsarten nicht unterstützt sind werden Bestellungen bei einem Treffen mit unseren Mitarbeitern bezahlt, bis 5 Bestellungen mit deinem Account abgeschlossen wurden. Bei der 6ten Lieferung gibt es die Möglichkeit bei der Lieferung zu bezahlen</div>
+<h2>Zwischensumme: <%= money(subtotal) %></h2><% if (couponResult && couponResult.valid) { %><h2>Rabatt: -<%= money(couponResult.discountCents) %></h2><% } %><h2>Gesamt: <%= money(total) %></h2><form method="post" action="/orders/place" class="panel"><label>Zahlungsart<select name="payment_method"><option>Vorauszahlung</option><% if (user.role === 'premcustomer' || user.premium) { %><option>Bei Lieferung</option><% } %></select></label><p class="muted"><%= (user.role === 'premcustomer' || user.premium) ? 'PremCustomer freigeschaltet: Zahlung bei Lieferung möglich.' : 'Nach 5 gelieferten Bestellungen wirst du PremCustomer und kannst bei Lieferung bezahlen.' %></p><button>Bestellung aufgeben</button></form>
+<% } %>
+<%- include('layout-bottom') %>
