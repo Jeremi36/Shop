@@ -1,1 +1,0 @@
-<%- include('layout-top') %><h1>Bewertungen</h1><% reviews.forEach(r=>{ %><article class="panel"><h2><%= '★'.repeat(r.rating) %><%= '☆'.repeat(5-r.rating) %></h2><p><%= r.comment || 'Keine Beschreibung.' %></p><small>Von <%= r.full_name %> am <%= new Date(r.created_at).toLocaleDateString('de-DE') %></small></article><% }) %><%- include('layout-bottom') %>
