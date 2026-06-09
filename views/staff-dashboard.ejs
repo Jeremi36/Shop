@@ -1,8 +1,0 @@
-<%- include('layout-top') %><h1>Staff Übersicht</h1><div class="grid">
-<a class="card" href="/staff/orders?filter=Placed"><h2><%= stats.placed %></h2><p>Bestellungen</p></a>
-<a class="card" href="/staff/orders?filter=Accepted"><h2><%= stats.accepted %></h2><p>Accepted</p></a>
-<a class="card" href="/staff/orders?filter=Delivered"><h2><%= stats.delivered %></h2><p>Fertige Bestellungen</p></a>
-<a class="card" href="/staff/products"><h2><%= stats.products %></h2><p>Produkte bearbeiten</p></a>
-<a class="card" href="/staff/customers"><h2><%= stats.premium %></h2><p>Nutzer</p></a>
-<% if (isOwner) { %><a class="card" href="/staff/profit"><h2>€</h2><p>Profit Übersicht</p></a><a class="card" href="/staff/discount-codes"><h2>%</h2><p>Rabattcodes</p></a><% } %>
-</div><%- include('layout-bottom') %>
