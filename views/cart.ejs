@@ -1,8 +1,0 @@
-<%- include('layout-top') %>
-<h1>Warenkorb</h1>
-<% if (!items.length) { %><p>Dein Warenkorb ist leer.</p><% } else { %>
-<table><tr><th>Produkt</th><th>Menge</th><th>Preis</th><th>Summe</th></tr><% items.forEach(i => { %><tr><td><%= i.name %></td><td><form method="post" action="/cart/update/<%= i.id %>" class="inline"><input type="number" name="quantity" min="0" max="<%= i.stock %>" value="<%= i.quantity %>"><button>Ändern</button></form></td><td><%= money(discounted(i)) %></td><td><%= money(discounted(i)*i.quantity) %></td></tr><% }) %></table>
-<div class="notice"><b>Wichtiger Hinweis vor der Bestellung:</b><br>Diese Website ist keine Lieferwebsite und wird von einer einziger Person betrieben. Alle Lieferungen werden vor der Lieferung bezahlt, bis 5 Bestellungen abgeschlossen wurden. Bei der 6ten Lieferung gibt es die Möglichkeit bei der Lieferung zu bezahlen</div>
-<h2>Gesamt: <%= money(total) %></h2><form method="post" action="/orders/place" class="panel"><label>Zahlungsart<select name="payment_method"><option>Vorauszahlung</option><% if (user.premium) { %><option>Bei Lieferung</option><% } %></select></label><p class="muted"><%= user.premium ? 'Premium freigeschaltet: Zahlung bei Lieferung möglich.' : 'Nach 5 gelieferten Bestellungen wird Zahlung bei Lieferung freigeschaltet.' %></p><button>Bestellung aufgeben</button></form>
-<% } %>
-<%- include('layout-bottom') %>
