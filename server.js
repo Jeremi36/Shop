@@ -8,6 +8,7 @@ const path = require('path');
 const { Pool } = require('pg');
 
 const app = express();
+app.set('trust proxy', 1);
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
@@ -31,7 +32,7 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'dev-secret-change-me',
   resave: false,
   saveUninitialized: false,
-  cookie: { maxAge: 1000 * 60 * 60 * 24 * 14, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' }
+  cookie: { maxAge: 1000 * 60 * 60 * 24 * 14, sameSite: 'lax', secure: 'auto' }
 }));
 
 const money = cents => (cents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
