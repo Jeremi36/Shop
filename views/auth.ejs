@@ -1,7 +1,0 @@
-<%- include('layout-top') %>
-<div class="panel small"><h1><%= mode === 'login' ? 'Einloggen' : 'Konto erstellen' %></h1><% if (error) { %><p class="error"><%= error %></p><% } %>
-<form method="post" action="/<%= mode %>" class="stack">
-<label>E-Mail<input name="email" type="email" required></label><label>Passwort<input name="password" type="password" required minlength="6"></label>
-<% if (mode === 'register') { %><label>Vollständiger Name<input name="full_name" required></label><label>Straße + Hausnummer<input name="street" required></label><label>PLZ<input name="postal_code" required></label><label>Ort<input name="city" required></label><label>Telefon optional<input name="phone"></label><% } %>
-<button><%= mode === 'login' ? 'Einloggen' : 'Registrieren' %></button></form></div>
-<%- include('layout-bottom') %>
