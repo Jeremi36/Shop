@@ -1,0 +1,22 @@
+{
+  "name": "premium-shop",
+  "version": "1.2.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "migrate": "node scripts/migrate.js",
+    "seed": "node scripts/seed.js"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "bcryptjs": "latest",
+    "connect-pg-simple": "latest",
+    "dotenv": "latest",
+    "ejs": "latest",
+    "express": "latest",
+    "express-session": "latest",
+    "multer": "latest",
+    "pg": "latest",
+    "resend": "latest"
+  }
+}
