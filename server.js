@@ -1,0 +1,1794 @@
+require('dotenv').config();
+const express = require('express');
+const session = require('express-session');
+const PgSession = require('connect-pg-simple')(session);
+const bcrypt = require('bcryptjs');
+const multer = require('multer');
+const path = require('path');
+const { Pool } = require('pg');
+const nodemailer = require('nodemailer');
+const crypto = require('crypto');
+const fs = require('fs');
+const { Readable } = require('stream');
+const cloudinary = require('cloudinary').v2;
+
+const app = express();
+app.set('trust proxy', 1);
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 3 * 1024 * 1024 },
+  fileFilter: (_, file, cb) => {
+    const allowed = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+    if (!allowed.includes(file.mimetype)) return cb(new Error('Bitte nur PNG, JPG, JPEG, WEBP oder GIF hochladen.'));
+    cb(null, true);
+  }
+});
+
+const localUploadDir = path.join(__dirname, 'public/uploads');
+fs.mkdirSync(localUploadDir, { recursive: true });
+
+function extensionFromFile(file) {
+  const byMime = {
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/webp': '.webp',
+    'image/gif': '.gif'
+  };
+  return byMime[file.mimetype] || path.extname(file.originalname || '').toLowerCase() || '.jpg';
+}
+
+const cloudinaryRequiredKeys = [
+  'CLOUDINARY_CLOUD_NAME',
+  'CLOUDINARY_API_KEY',
+  'CLOUDINARY_API_SECRET'
+];
+const cloudinaryMissingKeys = cloudinaryRequiredKeys.filter((key) => !process.env[key]);
+const cloudinaryConfigured = cloudinaryMissingKeys.length === 0;
+const localImageFallbackEnabled = process.env.LOCAL_IMAGE_FALLBACK === 'true';
+
+if (cloudinaryConfigured) {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+    secure: true
+  });
+}
+
+function cloudinaryPublicId(productId) {
+  return `premium-shop/products/${productId}`;
+}
+
+function uploadToCloudinary(file, productId) {
+  return new Promise((resolve, reject) => {
+    if (!cloudinaryConfigured) {
+      return reject(new Error(`Cloudinary ist nicht vollständig konfiguriert. Fehlende Render-Variablen: ${cloudinaryMissingKeys.join(', ')}. Deshalb wurde das Bild NICHT lokal gespeichert, weil lokale Render-Uploads bei Redeploys verschwinden würden.`));
+    }
+
+    const publicId = cloudinaryPublicId(productId);
+    const stream = cloudinary.uploader.upload_stream({
+      public_id: publicId,
+      resource_type: 'image',
+      overwrite: true,
+      invalidate: true,
+      folder: undefined,
+      use_filename: false,
+      unique_filename: false
+    }, (err, result) => {
+      if (err) return reject(err);
+      resolve(result);
+    });
+
+    stream.end(file.buffer);
+  });
+}
+
+async function storeProductImage(file, productId) {
+  if (!file) return null;
+  const ext = extensionFromFile(file);
+  const fileName = `${productId}${ext}`;
+
+  if (cloudinaryConfigured) {
+    const result = await uploadToCloudinary(file, productId);
+    console.log(`[Cloudinary] Produktbild gespeichert: ${fileName} (${result.public_id})`);
+    return result.secure_url;
+  }
+
+  if (!localImageFallbackEnabled) {
+    throw new Error(`Cloudinary ist nicht vollständig konfiguriert. Fehlende Render-Variablen: ${cloudinaryMissingKeys.join(', ')}. Deshalb wurde das Bild NICHT lokal gespeichert, weil lokale Render-Uploads bei Redeploys verschwinden würden.`);
+  }
+
+  console.warn('[WARN] LOCAL_IMAGE_FALLBACK=true aktiv. Produktbilder werden lokal gespeichert und können bei Render-Redeploys verschwinden.');
+  for (const old of fs.readdirSync(localUploadDir)) {
+    if (old.startsWith(`${productId}.`)) fs.rmSync(path.join(localUploadDir, old), { force: true });
+  }
+  fs.writeFileSync(path.join(localUploadDir, fileName), file.buffer);
+  return `/public/uploads/${fileName}`;
+}
+
+async function deleteProductImage(productId) {
+  if (cloudinaryConfigured) {
+    try {
+      const publicId = cloudinaryPublicId(productId);
+      await cloudinary.uploader.destroy(publicId, { resource_type: 'image', invalidate: true });
+      console.log(`[Cloudinary] Produktbild gelöscht: ${publicId}`);
+    } catch (err) {
+      console.error('[Cloudinary] Produktbild konnte nicht gelöscht werden:', err.message);
+    }
+    return;
+  }
+  if (fs.existsSync(localUploadDir)) {
+    for (const old of fs.readdirSync(localUploadDir)) {
+      if (old.startsWith(`${productId}.`)) fs.rmSync(path.join(localUploadDir, old), { force: true });
+    }
+  }
+}
+
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
+
+app.use('/public', express.static(path.join(__dirname, 'public')));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+app.use(session({
+  store: new PgSession({ pool, createTableIfMissing: true }),
+  secret: process.env.SESSION_SECRET || 'dev-secret-change-me',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { maxAge: 1000 * 60 * 60 * 24 * 14, sameSite: 'lax', secure: 'auto' }
+}));
+
+const money = cents => (cents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
+const discounted = p => Math.round(p.price_cents * (100 - p.discount_percent) / 100);
+const staffRoles = ['owner', 'staff'];
+const customerRoles = ['customer', 'premcustomer'];
+const roleLabel = role => ({ owner:'Owner', staff:'Staff', customer:'Customer', premcustomer:'PremCustomer' }[role] || role);
+const clientIp = req => String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0].trim();
+function identityKey(fullName, street, postalCode, city) {
+  return [fullName, street, postalCode, city].map(v => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ')).join('|');
+}
+async function findBanFor({ email, ip, fullName, street, postalCode, city }) {
+  const identity = identityKey(fullName, street, postalCode, city);
+  const { rows } = await pool.query(`
+    SELECT * FROM ban_rules
+    WHERE active=true AND (
+      (type='email' AND value=$1) OR
+      (type='ip' AND value=$2) OR
+      (type='identity' AND value=$3)
+    )
+    ORDER BY created_at DESC LIMIT 1
+  `, [String(email || '').toLowerCase(), ip || '', identity]);
+  return rows[0] || null;
+}
+function meetingUrl(orderId) { return orderUrl(orderId); }
+
+function parseVariants(value) {
+  return String(value || '')
+    .split(/\r?\n|,/)
+    .map(v => v.trim())
+    .filter(Boolean)
+    .filter((v, i, arr) => arr.findIndex(x => x.toLowerCase() === v.toLowerCase()) === i);
+}
+async function replaceProductVariants(clientOrPool, productId, variants) {
+  await clientOrPool.query('UPDATE product_variants SET active=false WHERE product_id=$1', [productId]);
+  for (const variant of variants) {
+    await clientOrPool.query(`INSERT INTO product_variants (product_id,name,active) VALUES ($1,$2,true)
+      ON CONFLICT (product_id,name) DO UPDATE SET active=true`, [productId, variant]);
+  }
+}
+async function validateVariety(productId, selectedVariety) {
+  const variants = await pool.query('SELECT name FROM product_variants WHERE product_id=$1 AND active=true ORDER BY name', [productId]);
+  if (!variants.rows.length) return '';
+  const wanted = String(selectedVariety || '').trim();
+  const match = variants.rows.find(v => v.name === wanted);
+  if (!match) throw new Error('Bitte wähle eine gültige Sorte aus.');
+  return match.name;
+}
+
+const mailFrom = process.env.MAIL_FROM || process.env.MAILERSEND_FROM || `Premium Shop <${process.env.SMTP_USER || 'no-reply@example.com'}>`;
+const appUrl = (process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
+
+function parseMailFrom(value) {
+  const raw = String(value || '').trim();
+  const m = raw.match(/^(.*?)\s*<([^>]+)>$/);
+  if (m) {
+    return { name: m[1].trim().replace(/^"|"$/g, '') || 'Premium Shop', email: m[2].trim() };
+  }
+  return { name: 'Premium Shop', email: raw || 'no-reply@example.com' };
+}
+
+const mailersendConfigured = !!process.env.MAILERSEND_API_KEY;
+const smtpConfigured = !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+
+function makeTransporter(port, secure) {
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port,
+    secure,
+    // Render kann manchmal IPv6-Adressen von smtp.gmail.com auflösen,
+    // aber keine IPv6-Verbindung nach außen öffnen. family: 4 erzwingt IPv4.
+    family: 4,
+    connectionTimeout: 30000,
+    greetingTimeout: 30000,
+    socketTimeout: 60000,
+    requireTLS: !secure,
+    tls: {
+      servername: process.env.SMTP_HOST
+    },
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS
+    }
+  });
+}
+
+function smtpTransportsToTry() {
+  if (!smtpConfigured) return [];
+  const configuredPort = Number(process.env.SMTP_PORT || 587);
+  const configuredSecure = String(process.env.SMTP_SECURE || 'false') === 'true';
+  const tries = [{ port: configuredPort, secure: configuredSecure }];
+  if (!(configuredPort === 587 && configuredSecure === false)) tries.push({ port: 587, secure: false });
+  if (!(configuredPort === 465 && configuredSecure === true)) tries.push({ port: 465, secure: true });
+  return tries;
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+function orderUrl(orderId) { return appUrl ? `${appUrl}/orders/${orderId}` : `/orders/${orderId}`; }
+function resetUrl(token) { return appUrl ? `${appUrl}/reset-password/${token}` : `/reset-password/${token}`; }
+function statusDe(field, value) {
+  const labels = {
+    status: { Placed: 'Aufgegeben', Accepted: 'Angenommen', Denied: 'Abgelehnt' },
+    payment_status: { Paid: 'Bezahlt', Unpaid: 'Unbezahlt', 'Pay on delivery': 'Bezahlung bei Lieferung' },
+    delivery_status: { 'Not Started': 'Noch nicht gestartet', 'Delivery in Progress': 'Lieferung in Bearbeitung', Delivered: 'Geliefert' }
+  };
+  return labels[field]?.[value] || value;
+}
+function fieldDe(field) {
+  return { status: 'Bestellstatus', payment_status: 'Zahlungsstatus', delivery_status: 'Lieferstatus' }[field] || field;
+}
+
+async function sendMailViaMailerSend(recipients, subject, html, text) {
+  const from = parseMailFrom(mailFrom);
+  const payload = {
+    from,
+    to: recipients.map(email => ({ email })),
+    subject,
+    html,
+    text: text || html.replace(/<[^>]*>/g, ' ')
+  };
+  const response = await fetch('https://api.mailersend.com/v1/email', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.MAILERSEND_API_KEY}`,
+      'Content-Type': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest'
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`MailerSend ${response.status}: ${body.slice(0, 1000)}`);
+  }
+  const id = response.headers.get('x-message-id') || 'ohne message id';
+  console.log(`[Mail gesendet] ${subject} an ${recipients.join(', ')} via MailerSend (${id})`);
+}
+
+async function sendMailViaSmtp(recipients, subject, html, text) {
+  let lastError = null;
+  for (const cfg of smtpTransportsToTry()) {
+    try {
+      const transporter = makeTransporter(cfg.port, cfg.secure);
+      await transporter.sendMail({
+        from: mailFrom,
+        to: recipients.join(','),
+        subject,
+        html,
+        text: text || html.replace(/<[^>]*>/g, ' ')
+      });
+      console.log(`[Mail gesendet] ${subject} an ${recipients.join(', ')} via SMTP ${cfg.port}/${cfg.secure ? 'SSL' : 'STARTTLS'}`);
+      return true;
+    } catch (err) {
+      lastError = err;
+      console.error(`[Mail Fehler] SMTP ${cfg.port}/${cfg.secure ? 'SSL' : 'STARTTLS'}:`, err.message);
+    }
+  }
+  if (lastError) throw lastError;
+  return false;
+}
+
+async function sendMail(to, subject, html, text) {
+  if (!to) {
+    console.log('[Mail übersprungen] Empfänger fehlt:', subject);
+    return;
+  }
+  const recipients = (Array.isArray(to) ? to : [to])
+    .map(v => String(v || '').trim())
+    .filter(Boolean);
+  if (!recipients.length) return;
+
+  if (mailersendConfigured) {
+    try {
+      await sendMailViaMailerSend(recipients, subject, html, text);
+      return;
+    } catch (err) {
+      console.error('[Mail Fehler] MailerSend:', err.message);
+      if (!smtpConfigured) return;
+      console.error('[Mail Info] Versuche SMTP-Fallback...');
+    }
+  }
+
+  if (smtpConfigured) {
+    try {
+      await sendMailViaSmtp(recipients, subject, html, text);
+      return;
+    } catch (err) {
+      console.error('[Mail Fehler] Alle SMTP-Varianten fehlgeschlagen:', err.message || 'Unbekannter Fehler');
+      return;
+    }
+  }
+
+  console.log('[Mail übersprungen] Keine MailerSend- oder SMTP-Daten konfiguriert:', subject);
+}
+
+async function emailBanUpdate(user, reason, bannedNow) {
+  if (!user?.email) return;
+  if (bannedNow) {
+    await sendMail(
+      user.email,
+      'Premium Shop: Konto gesperrt',
+      `<h2>Konto gesperrt</h2><p>Hallo ${escapeHtml(user.full_name)},</p><p>dein Konto kann aktuell keine Bestellungen aufgeben.</p><p><b>Grund:</b> ${escapeHtml(reason || 'Nicht angegeben')}</p><p>Falls du glaubst, dass das ein Fehler ist, melde dich beim Premium Shop Team.</p>`,
+      `Dein Konto kann aktuell keine Bestellungen aufgeben. Grund: ${reason || 'Nicht angegeben'}`
+    );
+  } else {
+    await sendMail(
+      user.email,
+      'Premium Shop: Konto entsperrt',
+      `<h2>Konto entsperrt</h2><p>Hallo ${escapeHtml(user.full_name)},</p><p>dein Konto wurde entsperrt. Du kannst wieder Bestellungen aufgeben.</p>`,
+      'Dein Konto wurde entsperrt. Du kannst wieder Bestellungen aufgeben.'
+    );
+  }
+}
+
+async function emailDiscountCodeCreated(codeId) {
+  const { rows } = await pool.query(`
+    SELECT dc.*, c.name AS category_name, u.email AS target_email, u.full_name AS target_name
+    FROM discount_codes dc
+    LEFT JOIN categories c ON c.id=dc.category_id
+    LEFT JOIN users u ON u.id=dc.account_specific_user_id
+    WHERE dc.id=$1
+  `, [codeId]);
+  const dc = rows[0];
+  if (!dc || !dc.active) return;
+  let users;
+  if (dc.account_specific_user_id) {
+    users = (dc.target_email && !dc.target_email.endsWith('@example.com')) ? [{ email: dc.target_email, full_name: dc.target_name }] : [];
+  } else {
+    users = (await pool.query(`
+      SELECT email, full_name FROM users
+      WHERE role IN ('customer','premcustomer')
+        AND COALESCE(banned,false)=false
+        AND email IS NOT NULL AND email <> ''
+      LIMIT 500
+    `)).rows;
+  }
+  const recipients = [...new Set(users.map(u => String(u.email || '').trim()).filter(Boolean))];
+  if (!recipients.length) return;
+
+  const parts = [];
+  if (dc.discount_type === 'percent') parts.push(`${dc.discount_percent}% Rabatt`);
+  if (dc.discount_type === 'fixed') parts.push(`${money(dc.discount_cents)} Rabatt`);
+  if (dc.buy_x && dc.get_y) parts.push(`Buy ${dc.buy_x}, get ${dc.get_y}`);
+  if (dc.max_discount_cents != null) parts.push(`max. ${money(dc.max_discount_cents)} Rabatt`);
+  if (dc.min_order_cents) parts.push(`ab ${money(dc.min_order_cents)} Einkaufswert`);
+  if (dc.category_name) parts.push(`Kategorie: ${dc.category_name}`);
+  if (dc.expires_at) parts.push(`gültig bis ${new Date(dc.expires_at).toLocaleString('de-DE')}`);
+  const list = parts.length ? `<ul>${parts.map(p => `<li>${escapeHtml(p)}</li>`).join('')}</ul>` : '';
+  await sendMail(
+    recipients,
+    `Premium Shop: Neuer Rabattcode ${dc.code}`,
+    `<h2>Neuer Rabattcode</h2><p>Es gibt einen neuen Rabattcode:</p><p style="font-size:24px"><b>${escapeHtml(dc.code)}</b></p>${list}<p>${escapeHtml(dc.description || '')}</p><p><a href="${escapeHtml(appUrl || '/')}">Zum Shop</a></p>`,
+    `Neuer Rabattcode: ${dc.code}. ${parts.join(', ')} ${dc.description || ''}`
+  );
+}
+
+async function emailOrderStatusUpdate(orderId, before, after) {
+  const changes = ['status','payment_status','delivery_status'].filter(f => before[f] !== after[f]);
+  if (!changes.length) return;
+  const { rows } = await pool.query('SELECT o.*, u.email, u.full_name FROM orders o JOIN users u ON u.id=o.user_id WHERE o.id=$1', [orderId]);
+  const order = rows[0];
+  if (!order) return;
+  const list = changes.map(f => `<li><b>${fieldDe(f)}:</b> ${escapeHtml(statusDe(f, before[f]))} → ${escapeHtml(statusDe(f, after[f]))}</li>`).join('');
+  await sendMail(
+    order.email,
+    `Premium Shop: Update zu deiner Bestellung`,
+    `<h2>Update zu deiner Bestellung</h2><p>Hallo ${escapeHtml(order.full_name)},</p><p>bei deiner Bestellung gab es ein Update:</p><ul>${list}</ul><p><a href="${escapeHtml(orderUrl(order.id))}">Bestellung öffnen</a></p><p>Premium Shop</p>`,
+    `Update zu deiner Bestellung: ${changes.map(f => `${fieldDe(f)}: ${statusDe(f, before[f])} -> ${statusDe(f, after[f])}`).join(', ')}. ${orderUrl(order.id)}`
+  );
+}
+async function emailNewMessage(order, sender, body) {
+  const isSenderStaff = staffRoles.includes(sender.role);
+  let recipients = [];
+  if (isSenderStaff) {
+    recipients = [order.email];
+  } else {
+    const staff = await pool.query(`
+      SELECT DISTINCT u.email
+      FROM users u
+      WHERE u.role='owner'
+         OR u.id=$1
+    `, [order.assigned_staff_id || null]);
+    recipients = staff.rows.map(r => r.email);
+  }
+  const preview = escapeHtml(String(body || '').slice(0, 500));
+  await sendMail(
+    recipients,
+    `Premium Shop: Neue Nachricht zu Bestellung`,
+    `<h2>Neue Nachricht</h2><p><b>${escapeHtml(sender.full_name)}</b> hat eine Nachricht zur Bestellung geschrieben:</p><blockquote>${preview}</blockquote><p><a href="${escapeHtml(orderUrl(order.id))}">Konversation öffnen</a></p><p>Premium Shop</p>`,
+    `Neue Nachricht von ${sender.full_name}: ${String(body || '').slice(0, 500)} ${orderUrl(order.id)}`
+  );
+}
+
+
+async function emailMeetingUpdate(orderId) {
+  const { rows } = await pool.query('SELECT o.*, u.email, u.full_name FROM orders o JOIN users u ON u.id=o.user_id WHERE o.id=$1', [orderId]);
+  const order = rows[0];
+  if (!order) return;
+  await sendMail(
+    order.email,
+    'Premium Shop: Treffpunkt zur Bestellung aktualisiert',
+    `<h2>Treffpunkt aktualisiert</h2><p>Hallo ${escapeHtml(order.full_name)},</p><p>Deine Bestellung hat neue Treffpunkt-Informationen:</p><ul><li><b>Ort:</b> ${escapeHtml(order.meeting_location || '-')}</li><li><b>Zeit:</b> ${order.meeting_at ? escapeHtml(new Date(order.meeting_at).toLocaleString('de-DE')) : '-'}</li><li><b>Hinweis:</b> ${escapeHtml(order.meeting_note || '-')}</li></ul><p><a href="${escapeHtml(orderUrl(order.id))}">Bestellung öffnen</a></p>`,
+    `Treffpunkt: ${order.meeting_location || '-'} / ${order.meeting_at ? new Date(order.meeting_at).toLocaleString('de-DE') : '-'} / ${order.meeting_note || ''} ${orderUrl(order.id)}`
+  );
+}
+
+async function currentUser(req, res, next) {
+  res.locals.user = null;
+  res.locals.cartCount = 0;
+  res.locals.notifications = 0;
+  res.locals.staffActionCount = 0;
+  res.locals.money = money;
+  res.locals.discounted = discounted;
+  res.locals.roleLabel = roleLabel;
+  res.locals.isStaff = false;
+  res.locals.isOwner = false;
+  res.locals.isCustomer = false;
+  res.locals.originalUrl = req.originalUrl;
+  if (req.session.userId) {
+    const { rows } = await pool.query('SELECT * FROM users WHERE id=$1', [req.session.userId]);
+    res.locals.user = rows[0] || null;
+    if (res.locals.user) {
+      res.locals.isStaff = staffRoles.includes(res.locals.user.role);
+      res.locals.isOwner = res.locals.user.role === 'owner';
+      res.locals.isCustomer = customerRoles.includes(res.locals.user.role);
+      const cc = await pool.query('SELECT COALESCE(SUM(quantity),0)::int AS count FROM carts WHERE user_id=$1', [res.locals.user.id]);
+      res.locals.cartCount = cc.rows[0].count;
+      const nn = await pool.query(`
+        SELECT COUNT(*)::int AS count FROM orders o
+        WHERE o.user_id=$1 AND (o.customer_seen_at IS NULL OR o.updated_at > o.customer_seen_at
+          OR EXISTS (SELECT 1 FROM messages m WHERE m.order_id=o.id AND m.sender_id<>$1 AND (o.customer_seen_at IS NULL OR m.created_at > o.customer_seen_at)))
+      `, [res.locals.user.id]);
+      res.locals.notifications = nn.rows[0].count;
+      if (staffRoles.includes(res.locals.user.role)) {
+        const sq = res.locals.user.role === 'owner'
+          ? await pool.query("SELECT COUNT(*)::int AS count FROM orders WHERE status='Placed' AND delivery_status <> 'Delivered' AND archived_by_staff=false")
+          : await pool.query("SELECT COUNT(*)::int AS count FROM orders WHERE status='Placed' AND delivery_status <> 'Delivered' AND archived_by_staff=false AND assigned_staff_id=$1", [res.locals.user.id]);
+        res.locals.staffActionCount = sq.rows[0].count;
+      }
+    }
+  }
+  next();
+}
+app.use(currentUser);
+
+function requireLogin(req, res, next) { if (!res.locals.user) return res.redirect('/login'); next(); }
+function requireStaff(req, res, next) { if (!res.locals.isStaff) return res.status(403).send('Kein Zugriff'); next(); }
+function requireOwner(req, res, next) { if (!res.locals.isOwner) return res.status(403).send('Nur Owner dürfen Rollen ändern.'); next(); }
+function requireCustomer(req, res, next) { if (!res.locals.isCustomer) return res.status(403).send('Nur Kunden können das machen.'); next(); }
+
+async function attachVariants(products) {
+  if (!products.length) return products;
+  const ids = products.map(p => p.id);
+  const { rows } = await pool.query('SELECT * FROM product_variants WHERE product_id = ANY($1) ORDER BY name', [ids]);
+  const byProduct = {};
+  rows.forEach(v => { (byProduct[v.product_id] ||= []).push(v); });
+  return products.map(p => ({ ...p, variants: byProduct[p.id] || [] }));
+}
+
+function productSortSql(sort) {
+  return {
+    'price_asc': 'p.price_cents ASC, p.name ASC',
+    'price_desc': 'p.price_cents DESC, p.name ASC',
+    'name_asc': 'p.name ASC',
+    'name_desc': 'p.name DESC',
+    'views_desc': 'p.views_count DESC, p.name ASC',
+    'sold_desc': 'sold_count DESC, p.name ASC',
+    'created_desc': 'p.created_at DESC'
+  }[sort] || 'p.created_at DESC';
+}
+
+function productRedirect(req, productId) {
+  const returnTo = String(req.body.return_to || req.get('referer') || '/staff/products').split('#')[0] || '/staff/products';
+  return returnTo + (productId ? `#produkt-${productId}` : '');
+}
+
+async function getDefaultCategoryId(db = pool) {
+  const { rows } = await db.query(`
+    INSERT INTO categories (name, description, active)
+    VALUES ('Allgemein', 'Automatisch erstellte Standard-Kategorie', true)
+    ON CONFLICT (name) DO UPDATE SET active=true
+    RETURNING id
+  `);
+  return rows[0].id;
+}
+
+async function categoryOrDefault(categoryId, db = pool) {
+  return categoryId || await getDefaultCategoryId(db);
+}
+
+function isUuidValue(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+}
+function requireUuidParam(req, res, next) {
+  if (!isUuidValue(req.params.id)) return res.status(404).send('Nicht gefunden');
+  next();
+}
+
+function safeStockInt(value, fallback = 0) {
+  const n = parseInt(String(value ?? '').trim(), 10);
+  return Number.isFinite(n) ? Math.max(0, n) : fallback;
+}
+
+async function syncProductStock(clientOrPool, productId) {
+  const { rows } = await clientOrPool.query(
+    'SELECT COUNT(*)::int AS count, COALESCE(SUM(stock),0)::int AS stock FROM product_variants WHERE product_id=$1 AND active=true',
+    [productId]
+  );
+  if (rows[0] && rows[0].count > 0) {
+    await clientOrPool.query('UPDATE products SET stock=$1 WHERE id=$2', [safeStockInt(rows[0].stock), productId]);
+  } else {
+    await clientOrPool.query('UPDATE products SET stock=GREATEST(COALESCE(stock,0),0) WHERE id=$1', [productId]);
+  }
+}
+
+function firstMatch(text, patterns) {
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return match;
+  }
+  return null;
+}
+
+function compactText(value) {
+  return String(value || '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeVariantName(value) {
+  return compactText(value)
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[^a-z0-9äöüß%.,+-]/gi, '');
+}
+
+function hasHiddenClass(classValue) {
+  return /(^|\s)hidden(\s|$)/i.test(String(classValue || ''));
+}
+
+function visibleTextFlag(raw, classNeedle, textPattern) {
+  const regex = new RegExp(`<([a-z0-9]+)\\b([^>]*)class=["']([^"']*${classNeedle}[^"']*)["']([^>]*)>([\\s\\S]*?)<\\/\\1>`, 'ig');
+  let match;
+  while ((match = regex.exec(raw))) {
+    const cls = match[3] || '';
+    if (hasHiddenClass(cls)) continue;
+    const text = compactText(match[5]);
+    if (textPattern.test(text)) return true;
+  }
+  return false;
+}
+
+function extractJsonLdAvailability(raw) {
+  const scripts = [...String(raw || '').matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/ig)].map(m => m[1]);
+  const found = { availability: '', quantity: null };
+  function walk(obj) {
+    if (!obj || typeof obj !== 'object') return;
+    if (obj.availability && !found.availability) found.availability = String(obj.availability);
+    if ((obj.inventoryLevel || obj.quantity || obj.stock) && found.quantity === null) {
+      const q = obj.inventoryLevel?.value ?? obj.inventoryLevel ?? obj.quantity ?? obj.stock;
+      const n = safeStockInt(q, null);
+      if (n !== null) found.quantity = n;
+    }
+    if (Array.isArray(obj)) obj.forEach(walk);
+    else Object.values(obj).forEach(walk);
+  }
+  for (const script of scripts) {
+    try { walk(JSON.parse(script.replace(/&quot;/g, '"'))); } catch (_) {}
+  }
+  return found;
+}
+
+function parseSupplierVariants(raw) {
+  const variants = [];
+  const labelRegex = /<label\b([^>]*)class=["']([^"']*select-variant[^"']*)["']([^>]*)>([\s\S]*?)<\/label>/ig;
+  let match;
+  while ((match = labelRegex.exec(raw))) {
+    const attrs = `${match[1] || ''} ${match[3] || ''}`;
+    const cls = match[2] || '';
+    const body = match[4] || '';
+    const id = (attrs.match(/id=["']([^"']+)["']/i) || [])[1] || '';
+    const title = (attrs.match(/title=["']([^"']+)["']/i) || [])[1] || '';
+    const stockMatch = body.match(/<span\b[^>]*class=["'][^"']*stockcounter[^"']*["'][^>]*>\s*(\d+)x\s*<\/span>/i);
+    const stock = stockMatch ? safeStockInt(stockMatch[1], null) : null;
+    const nameMatch = [...body.matchAll(/<span\b(?![^>]*stockcounter)[^>]*>([\s\S]*?)<\/span>/ig)].map(m => compactText(m[1])).find(Boolean);
+    const name = nameMatch || compactText(title).replace(/^Wähle\s+ein\s*/i, '') || id;
+    const out = /(^|\s)outOfStock(\s|$)/i.test(cls) || /notonstock/i.test(body) || stock === 0;
+    const selected = /(^|\s)selected(\s|$)/i.test(cls);
+    variants.push({ id, name, stock, out, selected });
+  }
+  return variants;
+}
+
+function parseSupplierAvailability(html) {
+  const raw = String(html || '');
+  const jsonLd = extractJsonLdAvailability(raw);
+
+  const qtyMatch = firstMatch(raw, [
+    /<meta\b[^>]*itemprop=["']quantity["'][^>]*content=["'](\d+)["'][^>]*>/i,
+    /<meta\b[^>]*content=["'](\d+)["'][^>]*itemprop=["']quantity["'][^>]*>/i
+  ]);
+  const metaQty = qtyMatch ? safeStockInt(qtyMatch[1], null) : null;
+
+  const availabilityMatch = firstMatch(raw, [
+    /<meta\b[^>]*itemprop=["']availability["'][^>]*content=["']([^"']+)["'][^>]*>/i,
+    /<meta\b[^>]*content=["']([^"']+)["'][^>]*itemprop=["']availability["'][^>]*>/i,
+    /"availability"\s*:\s*"([^"]+)"/i
+  ]);
+  const availabilityRaw = availabilityMatch ? String(availabilityMatch[1]) : (jsonLd.availability || '');
+  const availability = availabilityRaw.toLowerCase();
+
+  const supplierVariants = parseSupplierVariants(raw);
+  const selectedVariant = supplierVariants.find(v => v.selected) || null;
+  const availableVariantStocks = supplierVariants.filter(v => !v.out && v.stock !== null).map(v => v.stock);
+
+  let detectedStock = null;
+  let source = 'unbekannt';
+  if (selectedVariant && selectedVariant.stock !== null) {
+    detectedStock = selectedVariant.stock;
+    source = `gewählte Händler-Variante ${selectedVariant.name}`;
+  } else if (metaQty !== null) {
+    detectedStock = metaQty;
+    source = 'meta quantity';
+  } else if (jsonLd.quantity !== null) {
+    detectedStock = jsonLd.quantity;
+    source = 'json-ld quantity';
+  } else if (availableVariantStocks.length) {
+    detectedStock = availableVariantStocks.reduce((a, b) => a + b, 0);
+    source = 'Summe Händler-Varianten';
+  }
+
+  const visibleOut = visibleTextFlag(raw, 'out-of-stock', /^Nicht\s+auf\s+Lager$/i);
+  const visibleIn = visibleTextFlag(raw, 'in-stock', /^Auf\s+Lager$/i);
+  const selectedOut = selectedVariant ? selectedVariant.out : false;
+
+  const saysOut = selectedOut || /out[_-]?of[_-]?stock/i.test(availability) || /schema\.org\/outofstock/i.test(availability) || visibleOut || detectedStock === 0;
+  const saysIn = /in[_-]?stock/i.test(availability) || /schema\.org\/instock/i.test(availability) || visibleIn || (detectedStock !== null && detectedStock > 0);
+
+  if (saysOut && !saysIn) {
+    return { status: 'out_of_stock', note: `Nicht auf Lager (${source}${detectedStock !== null ? ': ' + detectedStock : ''})`, stock: 0, source, variants: supplierVariants, selectedVariant };
+  }
+  if (saysIn && !selectedOut) {
+    return { status: 'in_stock', note: detectedStock !== null ? `Lager: ${detectedStock} (${source})` : 'Auf Lager', stock: detectedStock, source, variants: supplierVariants, selectedVariant };
+  }
+  if (detectedStock !== null) {
+    return detectedStock > 0
+      ? { status: 'in_stock', note: `Lager: ${detectedStock} (${source})`, stock: detectedStock, source, variants: supplierVariants, selectedVariant }
+      : { status: 'out_of_stock', note: `Nicht auf Lager (${source}: 0)`, stock: 0, source, variants: supplierVariants, selectedVariant };
+  }
+
+  return { status: 'unknown', note: 'Konnte Lagerstatus nicht sicher erkennen', stock: null, source, variants: supplierVariants, selectedVariant };
+}
+
+function normalizeSupplierUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return 'https://' + raw;
+}
+
+async function applySupplierStockToProduct(product, result) {
+  const variants = await pool.query('SELECT id,name FROM product_variants WHERE product_id=$1 AND active=true ORDER BY name', [product.id]);
+
+  if (result.status === 'out_of_stock') {
+    await pool.query('UPDATE products SET stock=0 WHERE id=$1', [product.id]);
+    await pool.query('UPDATE product_variants SET stock=0 WHERE product_id=$1', [product.id]);
+    await syncProductStock(pool, product.id);
+    return 'alle lokalen Bestände auf 0 gesetzt';
+  }
+
+  if (result.status !== 'in_stock' || result.stock === null || result.stock === undefined) {
+    return 'kein Bestand geändert';
+  }
+
+  const stock = safeStockInt(result.stock, 0);
+
+  if (!variants.rows.length) {
+    await pool.query('UPDATE products SET stock=$1 WHERE id=$2', [stock, product.id]);
+    return `Produktbestand auf ${stock} gesetzt`;
+  }
+
+  if (variants.rows.length === 1) {
+    await pool.query('UPDATE product_variants SET stock=$1 WHERE id=$2', [stock, variants.rows[0].id]);
+    await syncProductStock(pool, product.id);
+    return `eine lokale Sorte auf ${stock} gesetzt`;
+  }
+
+  let updated = 0;
+  const supplierVariants = Array.isArray(result.variants) ? result.variants : [];
+  for (const local of variants.rows) {
+    const localKey = normalizeVariantName(local.name);
+    const supplier = supplierVariants.find(v => normalizeVariantName(v.name) === localKey);
+    if (!supplier || supplier.stock === null || supplier.stock === undefined) continue;
+    await pool.query('UPDATE product_variants SET stock=$1 WHERE id=$2', [supplier.out ? 0 : safeStockInt(supplier.stock, 0), local.id]);
+    updated++;
+  }
+
+  if (updated > 0) {
+    await syncProductStock(pool, product.id);
+    return `${updated} lokale Sorten per Händlername aktualisiert`;
+  }
+
+  return `Bestand erkannt (${stock}), aber lokale Sorten passen nicht eindeutig zum Händler. Sorten manuell zuordnen/gleichen Namen nutzen.`;
+}
+
+async function checkSupplierStatus(product, { force=false } = {}) {
+  if (!product || !product.supplier_url) return null;
+  if (!force && product.supplier_checked_at) {
+    const ageMs = Date.now() - new Date(product.supplier_checked_at).getTime();
+    if (ageMs < 10 * 60 * 1000) return { status: product.supplier_status || 'unknown', note: product.supplier_status_note || 'Kürzlich geprüft', skipped: true };
+  }
+
+  let result = { status: 'unknown', note: 'Konnte Händlerseite nicht laden', stock: null };
+  try {
+    const url = normalizeSupplierUrl(product.supplier_url);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 18000);
+    const parsedUrl = new URL(url);
+    const response = await fetch(url, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: {
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149 Safari/537.36',
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'accept-language': 'de-DE,de;q=0.9,en;q=0.8',
+        'cache-control': 'no-cache',
+        'pragma': 'no-cache',
+        'referer': `${parsedUrl.protocol}//${parsedUrl.host}/`
+      }
+    });
+    clearTimeout(timeout);
+
+    const html = await response.text();
+    if (!response.ok) {
+      result = { status: 'unknown', note: `HTTP ${response.status} vom Händler (${html.length} Zeichen)`, stock: null };
+    } else if (!html || html.length < 500) {
+      result = { status: 'unknown', note: `Händlerantwort zu kurz (${html.length} Zeichen)`, stock: null };
+    } else {
+      result = parseSupplierAvailability(html);
+      const applied = await applySupplierStockToProduct(product, result);
+      result.note = `${result.note} · ${applied}`;
+    }
+  } catch (err) {
+    result = { status: 'unknown', note: err.name === 'AbortError' ? 'Timeout beim Händlercheck' : err.message, stock: null };
+  }
+
+  await pool.query('UPDATE products SET supplier_status=$1, supplier_status_note=$2, supplier_checked_at=now() WHERE id=$3', [result.status, result.note, product.id]);
+  return result;
+}
+
+async function getAppSetting(key) {
+  try {
+    const { rows } = await pool.query('SELECT value FROM app_settings WHERE key=$1', [key]);
+    return rows[0]?.value || null;
+  } catch (err) {
+    console.error('[Settings] konnte nicht gelesen werden:', err.message);
+    return null;
+  }
+}
+
+async function setAppSetting(key, value) {
+  try {
+    await pool.query(
+      `INSERT INTO app_settings (key, value, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`,
+      [key, value]
+    );
+  } catch (err) {
+    console.error('[Settings] konnte nicht gespeichert werden:', err.message);
+  }
+}
+
+let supplierAutoCheckInProgress = false;
+async function checkAllSupplierStatuses({ force = true } = {}) {
+  const { rows } = await pool.query("SELECT * FROM products WHERE COALESCE(TRIM(supplier_url),'') <> '' AND active=true ORDER BY name");
+  let checked = 0;
+  for (const product of rows) {
+    try {
+      await checkSupplierStatus(product, { force });
+      checked++;
+    } catch (err) {
+      console.error('[Händlercheck]', product.id, err.message);
+    }
+  }
+  return checked;
+}
+
+async function triggerHomepageSupplierCheckIfDue() {
+  const key = 'supplier_auto_check_last_at';
+  const last = await getAppSetting(key);
+  const lastMs = last ? new Date(last).getTime() : 0;
+  const tenMinutes = 10 * 60 * 1000;
+  if (supplierAutoCheckInProgress) return false;
+  if (lastMs && Date.now() - lastMs < tenMinutes) return false;
+
+  // Cooldown sofort setzen, damit mehrere Besucher nicht gleichzeitig alle Händlerseiten abrufen.
+  await setAppSetting(key, new Date().toISOString());
+  supplierAutoCheckInProgress = true;
+  checkAllSupplierStatuses({ force: true })
+    .then(count => console.log(`[Händlercheck] Auto-Check Homepage fertig: ${count} Produkte geprüft.`))
+    .catch(err => console.error('[Händlercheck] Auto-Check Homepage Fehler:', err.message))
+    .finally(() => { supplierAutoCheckInProgress = false; });
+  return true;
+}
+
+
+async function chooseAssignedStaff(client) {
+  const { rows } = await client.query(`
+    SELECT u.id, COUNT(o.id)::int AS active_orders
+    FROM users u
+    LEFT JOIN orders o ON o.assigned_staff_id = u.id AND o.status <> 'Denied' AND o.delivery_status <> 'Delivered'
+    WHERE u.role IN ('owner','staff')
+    GROUP BY u.id
+    ORDER BY active_orders ASC, random()
+    LIMIT 1
+  `);
+  return rows[0]?.id || null;
+}
+
+async function createPasswordReset(userId, createdBy = null) {
+  const token = crypto.randomBytes(32).toString('hex');
+  await pool.query(
+    `INSERT INTO password_reset_tokens (user_id, token, created_by, expires_at) VALUES ($1,$2,$3,now() + interval '2 hours')`,
+    [userId, token, createdBy]
+  );
+  return token;
+}
+
+function priceToCents(value) {
+  return Math.max(0, Math.round(parseFloat(String(value || '0').replace(',', '.')) * 100) || 0);
+}
+
+function profitPercentFromPrices(priceCents, purchaseCents) {
+  if (!purchaseCents) return 0;
+  return Math.max(0, Math.round(((priceCents - purchaseCents) / purchaseCents) * 100));
+}
+function priceCentsFromProfit(purchaseCents, profitPercent) {
+  return Math.max(0, Math.round(purchaseCents * (1 + Math.max(0, parseFloat(profitPercent || '0') || 0) / 100)));
+}
+
+function normalizeCode(value) {
+  return String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+}
+function intOrNull(value) {
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+function euroInputToNullableCents(value) {
+  const str = String(value || '').trim();
+  if (!str) return null;
+  return priceToCents(str);
+}
+function sumItems(items) {
+  return items.reduce((s, r) => s + discounted(r) * r.quantity, 0);
+}
+function calcBuyXGetYDiscount(eligibleItems, buyX, getY) {
+  buyX = Math.max(0, parseInt(buyX || '0', 10));
+  getY = Math.max(0, parseInt(getY || '0', 10));
+  if (!buyX || !getY) return 0;
+  const prices = [];
+  for (const item of eligibleItems) {
+    const unit = discounted(item);
+    for (let i = 0; i < item.quantity; i++) prices.push(unit);
+  }
+  const groupSize = buyX + getY;
+  const freeCount = Math.floor(prices.length / groupSize) * getY;
+  if (freeCount <= 0) return 0;
+  prices.sort((a, b) => a - b);
+  return prices.slice(0, freeCount).reduce((s, v) => s + v, 0);
+}
+async function calculateDiscountForCode(db, codeInput, user, items, lock=false) {
+  const code = normalizeCode(codeInput);
+  if (!code) return { valid: false, error: 'Bitte gib einen Rabattcode ein.' };
+  const sql = `SELECT * FROM discount_codes WHERE code=$1 ${lock ? 'FOR UPDATE' : ''}`;
+  const { rows } = await db.query(sql, [code]);
+  const coupon = rows[0];
+  if (!coupon) return { valid: false, error: 'Diesen Rabattcode gibt es nicht.' };
+  if (!coupon.active) return { valid: false, error: 'Dieser Rabattcode ist deaktiviert.' };
+  if (coupon.expires_at && new Date(coupon.expires_at).getTime() <= Date.now()) return { valid: false, error: 'Dieser Rabattcode ist abgelaufen.' };
+  if (coupon.max_uses && coupon.used_count >= coupon.max_uses) return { valid: false, error: 'Dieser Rabattcode wurde bereits zu oft benutzt.' };
+  if (coupon.account_specific_user_id && coupon.account_specific_user_id !== user.id) return { valid: false, error: 'Dieser Rabattcode ist nur für einen bestimmten Account gültig.' };
+
+  const subtotal = sumItems(items);
+  if (coupon.min_order_cents && subtotal < coupon.min_order_cents) return { valid: false, error: `Mindesteinkaufswert nicht erreicht: ${money(coupon.min_order_cents)}.` };
+  const eligibleItems = coupon.category_id ? items.filter(i => i.category_id === coupon.category_id) : items;
+  const eligibleSubtotal = sumItems(eligibleItems);
+  if (!eligibleItems.length || eligibleSubtotal <= 0) return { valid: false, error: 'Der Rabattcode passt nicht zu den Produkten im Warenkorb.' };
+
+  let discountCents = 0;
+  if (coupon.discount_type === 'percent') {
+    discountCents += Math.floor(eligibleSubtotal * coupon.discount_percent / 100);
+  } else if (coupon.discount_type === 'fixed') {
+    discountCents += Math.min(coupon.discount_cents, eligibleSubtotal);
+  }
+  discountCents += calcBuyXGetYDiscount(eligibleItems, coupon.buy_x, coupon.get_y);
+  if (coupon.max_discount_cents !== null && coupon.max_discount_cents !== undefined) {
+    discountCents = Math.min(discountCents, coupon.max_discount_cents);
+  }
+  discountCents = Math.max(0, Math.min(discountCents, subtotal));
+  if (discountCents <= 0) return { valid: false, error: 'Dieser Rabattcode bringt für diesen Warenkorb keinen Rabatt.' };
+  return { valid: true, coupon, code: coupon.code, discountCents, subtotal, total: subtotal - discountCents };
+}
+async function loadCartItems(userId, db=pool) {
+  const { rows } = await db.query(`SELECT c.id AS cart_id, c.quantity, c.variant_id, p.*, v.name AS variant_name, COALESCE(v.stock, p.stock) AS stock FROM carts c JOIN products p ON p.id=c.product_id LEFT JOIN product_variants v ON v.id=c.variant_id WHERE c.user_id=$1 ORDER BY p.name, v.name`, [userId]);
+  return rows;
+}
+
+app.get('/', async (req, res) => {
+  await triggerHomepageSupplierCheckIfDue();
+  const categoryId = req.query.kategorie || '';
+  const sort = req.query.sort || 'created_desc';
+  const categories = await pool.query('SELECT * FROM categories WHERE active=true ORDER BY name');
+  const orderBy = productSortSql(sort);
+
+  const baseProductSql = `
+    SELECT
+      p.id, p.name, p.description, p.price_cents, p.discount_percent,
+      p.stock, p.image_url, p.active, p.category_id, p.created_at, p.views_count,
+      p.supplier_status, p.supplier_checked_at,
+      c.name AS category_name,
+      COALESCE((SELECT SUM(v.stock) FROM product_variants v WHERE v.product_id = p.id), p.stock)::int AS display_stock,
+      COALESCE((SELECT SUM(oi.quantity) FROM order_items oi WHERE oi.product_id=p.id),0)::int AS sold_count
+    FROM products p
+    LEFT JOIN categories c ON c.id = p.category_id
+    WHERE p.active = true
+  `;
+
+  const products = categoryId
+    ? await pool.query(baseProductSql + ` AND p.category_id = $1 ORDER BY ${orderBy}`, [categoryId])
+    : await pool.query(baseProductSql + ` ORDER BY ${orderBy}`);
+
+  const productsWithVariants = await attachVariants(products.rows);
+  res.render('shop', { title: 'Shop', products: productsWithVariants, categories: categories.rows, selectedCategory: categoryId, sort });
+});
+
+app.get('/produkte/:id', async (req, res) => {
+  const productQ = await pool.query(`SELECT p.*, c.name AS category_name FROM products p LEFT JOIN categories c ON c.id=p.category_id WHERE p.id=$1 AND p.active=true`, [req.params.id]);
+  const product = productQ.rows[0];
+  if (!product) return res.status(404).send('Produkt nicht gefunden');
+  await pool.query('UPDATE products SET views_count = views_count + 1 WHERE id=$1', [product.id]);
+  product.views_count = (product.views_count || 0) + 1;
+  if (product.supplier_url) {
+    const supplier = await checkSupplierStatus(product).catch(err => ({ status: 'unknown', note: err.message }));
+    if (supplier && !supplier.skipped) {
+      product.supplier_status = supplier.status;
+      product.supplier_status_note = supplier.note;
+      product.supplier_checked_at = new Date();
+      if (supplier.status === 'out_of_stock') product.stock = 0;
+    }
+  }
+  const variants = await pool.query('SELECT * FROM product_variants WHERE product_id=$1 AND active=true ORDER BY name', [product.id]);
+  const stats = await pool.query(`
+    SELECT COALESCE((SELECT SUM(quantity) FROM order_items WHERE product_id=$1),0)::int AS sold_count,
+           COALESCE(ROUND(AVG(r.rating)::numeric, 2),0) AS avg_rating,
+           COUNT(DISTINCT r.id)::int AS review_count
+    FROM reviews r
+    JOIN orders o ON o.id=r.order_id
+    JOIN order_items oi ON oi.order_id=o.id
+    WHERE oi.product_id=$1
+  `, [product.id]);
+  const reviews = await pool.query(`
+    SELECT DISTINCT r.*, u.full_name
+    FROM reviews r
+    JOIN orders o ON o.id=r.order_id
+    JOIN order_items oi ON oi.order_id=o.id
+    JOIN users u ON u.id=r.user_id
+    WHERE oi.product_id=$1
+    ORDER BY r.created_at DESC
+    LIMIT 25
+  `, [product.id]);
+  res.render('product-detail', { title: product.name, product, variants: variants.rows, stats: stats.rows[0], reviews: reviews.rows });
+});
+
+app.get('/forgot-password', (req, res) => res.render('auth', { title: 'Passwort vergessen', mode: 'forgot', error: null, success: null }));
+app.post('/forgot-password', async (req, res) => {
+  const email = String(req.body.email || '').toLowerCase();
+  const { rows } = await pool.query("SELECT id,email,full_name,role FROM users WHERE email=$1 AND role IN ('customer','premcustomer')", [email]);
+  if (rows[0]) {
+    const token = await createPasswordReset(rows[0].id);
+    await sendMail(rows[0].email, 'Premium Shop: Passwort zurücksetzen', `<h2>Passwort zurücksetzen</h2><p>Hallo ${escapeHtml(rows[0].full_name)},</p><p>Hier kannst du dein Passwort zurücksetzen:</p><p><a href="${escapeHtml(resetUrl(token))}">${escapeHtml(resetUrl(token))}</a></p><p>Der Link ist 2 Stunden gültig.</p>`);
+  }
+  res.render('auth', { title: 'Passwort vergessen', mode: 'forgot', error: null, success: 'Falls diese E-Mail als Kunde existiert, wurde ein Reset-Link gesendet.' });
+});
+app.get('/reset-password/:token', async (req, res) => {
+  const { rows } = await pool.query('SELECT t.*, u.email FROM password_reset_tokens t JOIN users u ON u.id=t.user_id WHERE token=$1 AND used_at IS NULL AND expires_at > now()', [req.params.token]);
+  if (!rows[0]) return res.status(400).send('Dieser Link ist ungültig oder abgelaufen.');
+  res.render('auth', { title: 'Passwort zurücksetzen', mode: 'reset', token: req.params.token, error: null, success: null });
+});
+app.post('/reset-password/:token', async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM password_reset_tokens WHERE token=$1 AND used_at IS NULL AND expires_at > now()', [req.params.token]);
+  if (!rows[0]) return res.status(400).send('Dieser Link ist ungültig oder abgelaufen.');
+  const hash = await bcrypt.hash(req.body.password, 12);
+  await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, rows[0].user_id]);
+  await pool.query('UPDATE password_reset_tokens SET used_at=now() WHERE id=$1', [rows[0].id]);
+  res.redirect('/login');
+});
+
+app.get('/register', (req, res) => res.render('auth', { title: 'Registrieren', mode: 'register', error: null }));
+app.post('/register', async (req, res) => {
+  const { email, password, full_name, street, postal_code, city, phone } = req.body;
+  try {
+    const ban = await findBanFor({ email, ip: clientIp(req), fullName: full_name, street, postalCode: postal_code, city });
+    if (ban) return res.status(403).render('auth', { title: 'Registrieren', mode: 'register', error: 'Registrierung oder Bestellung ist für diese Daten gesperrt.' });
+    const hash = await bcrypt.hash(password, 12);
+    const { rows } = await pool.query(`INSERT INTO users (email,password_hash,full_name,street,postal_code,city,phone,role) VALUES ($1,$2,$3,$4,$5,$6,$7,'customer') RETURNING id`, [email.toLowerCase(), hash, full_name, street, postal_code, city, phone]);
+    if (rows[0].banned) return res.status(403).render('auth', { title: 'Einloggen', mode: 'login', error: 'Dieses Konto ist gesperrt.' });
+  req.session.userId = rows[0].id;
+    res.redirect('/');
+  } catch (_) {
+    res.status(400).render('auth', { title: 'Registrieren', mode: 'register', error: 'Diese E-Mail existiert bereits oder die Angaben sind ungültig.' });
+  }
+});
+
+app.get('/login', (req, res) => res.render('auth', { title: 'Einloggen', mode: 'login', error: null }));
+app.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+  const { rows } = await pool.query('SELECT * FROM users WHERE email=$1', [email.toLowerCase()]);
+  if (!rows[0] || !(await bcrypt.compare(password, rows[0].password_hash))) {
+    return res.status(401).render('auth', { title: 'Einloggen', mode: 'login', error: 'E-Mail oder Passwort falsch.' });
+  }
+  if (rows[0].banned) return res.status(403).render('auth', { title: 'Einloggen', mode: 'login', error: 'Dieses Konto ist gesperrt.' });
+  req.session.userId = rows[0].id;
+  res.redirect(staffRoles.includes(rows[0].role) ? '/staff' : '/');
+});
+app.post('/logout', (req, res) => req.session.destroy(() => res.redirect('/')));
+
+app.post('/cart/add/:id', requireLogin, requireCustomer, async (req, res) => {
+  const qty = Math.max(1, parseInt(req.body.quantity || '1', 10));
+  const variantId = req.body.variant_id || null;
+  const product = await pool.query('SELECT stock FROM products WHERE id=$1 AND active=true', [req.params.id]);
+  if (!product.rows[0]) return res.redirect('/');
+  const variants = await pool.query('SELECT * FROM product_variants WHERE product_id=$1 ORDER BY name', [req.params.id]);
+  let maxStock = product.rows[0].stock;
+  if (variants.rows.length) {
+    const selected = variants.rows.find(v => v.id === variantId);
+    if (!selected) return res.status(400).send('Bitte wähle eine Sorte aus.');
+    maxStock = selected.stock;
+  }
+  const existing = await pool.query('SELECT * FROM carts WHERE user_id=$1 AND product_id=$2 AND ((variant_id IS NULL AND $3::uuid IS NULL) OR variant_id=$3::uuid) LIMIT 1', [res.locals.user.id, req.params.id, variantId]);
+  if (existing.rows[0]) {
+    await pool.query('UPDATE carts SET quantity=$1 WHERE id=$2', [Math.min(existing.rows[0].quantity + qty, maxStock), existing.rows[0].id]);
+  } else {
+    await pool.query('INSERT INTO carts (user_id,product_id,variant_id,quantity) VALUES ($1,$2,$3,$4)', [res.locals.user.id, req.params.id, variantId, Math.min(qty, maxStock)]);
+  }
+  res.redirect('/cart');
+});
+
+app.get('/cart', requireLogin, requireCustomer, async (req, res) => {
+  const items = await loadCartItems(res.locals.user.id);
+  const subtotal = sumItems(items);
+  let couponResult = null;
+  if (req.session.couponCode && items.length) {
+    couponResult = await calculateDiscountForCode(pool, req.session.couponCode, res.locals.user, items);
+    if (!couponResult.valid) req.session.couponCode = null;
+  }
+  const couponError = req.session.couponError || null;
+  req.session.couponError = null;
+  const couponSuccess = req.session.couponSuccess || null;
+  req.session.couponSuccess = null;
+  const total = couponResult?.valid ? couponResult.total : subtotal;
+  res.render('cart', { title: 'Warenkorb', items, subtotal, total, couponResult, couponError, couponSuccess });
+});
+app.post('/cart/update/:id', requireLogin, requireCustomer, async (req, res) => {
+  const qty = parseInt(req.body.quantity, 10);
+  if (qty <= 0) await pool.query('DELETE FROM carts WHERE user_id=$1 AND id=$2', [res.locals.user.id, req.params.id]);
+  else await pool.query('UPDATE carts SET quantity=$1 WHERE user_id=$2 AND id=$3', [qty, res.locals.user.id, req.params.id]);
+  res.redirect('/cart');
+});
+
+app.post('/cart/coupon', requireLogin, requireCustomer, async (req, res) => {
+  const items = await loadCartItems(res.locals.user.id);
+  const result = await calculateDiscountForCode(pool, req.body.code, res.locals.user, items);
+  if (!result.valid) {
+    req.session.couponCode = null;
+    req.session.couponError = result.error;
+  } else {
+    req.session.couponCode = result.code;
+    req.session.couponSuccess = `Rabattcode ${result.code} angewendet: ${money(result.discountCents)} Rabatt.`;
+  }
+  res.redirect('/cart');
+});
+app.post('/cart/coupon/remove', requireLogin, requireCustomer, async (req, res) => {
+  req.session.couponCode = null;
+  req.session.couponSuccess = 'Rabattcode entfernt.';
+  res.redirect('/cart');
+});
+
+app.post('/orders/place', requireLogin, requireCustomer, async (req, res) => {
+  const ban = await findBanFor({ email: res.locals.user.email, ip: clientIp(req), fullName: res.locals.user.full_name, street: res.locals.user.street, postalCode: res.locals.user.postal_code, city: res.locals.user.city });
+  if (res.locals.user.banned || ban) return res.status(403).send('Dein Konto kann aktuell keine Bestellungen aufgeben.');
+  const canPayDelivery = res.locals.user.role === 'premcustomer' || res.locals.user.premium;
+  const paymentMethod = req.body.payment_method === 'Bei Lieferung' && canPayDelivery ? 'Bei Lieferung' : 'Vorauszahlung';
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const cart = await client.query(`SELECT c.id AS cart_id, c.quantity, c.variant_id, p.*, v.name AS variant_name, COALESCE(v.stock, p.stock) AS available_stock, COALESCE(v.stock, p.stock) AS stock FROM carts c JOIN products p ON p.id=c.product_id LEFT JOIN product_variants v ON v.id=c.variant_id WHERE c.user_id=$1 FOR UPDATE OF c,p`, [res.locals.user.id]);
+    if (!cart.rows.length) throw new Error('Warenkorb ist leer.');
+    for (const item of cart.rows) if (item.quantity > item.available_stock) throw new Error(`${item.name}${item.variant_name ? ' (' + item.variant_name + ')' : ''} ist nicht mehr genug auf Lager.`);
+    const subtotal = sumItems(cart.rows);
+    let couponResult = null;
+    if (req.session.couponCode) {
+      couponResult = await calculateDiscountForCode(client, req.session.couponCode, res.locals.user, cart.rows, true);
+      if (!couponResult.valid) throw new Error(couponResult.error);
+    }
+    const discountCents = couponResult?.valid ? couponResult.discountCents : 0;
+    const total = subtotal - discountCents;
+    const address = `${res.locals.user.full_name}\n${res.locals.user.street}\n${res.locals.user.postal_code} ${res.locals.user.city}\nTelefon: ${res.locals.user.phone || '-'}`;
+    const assignedStaffId = await chooseAssignedStaff(client);
+    const paymentStatus = paymentMethod === 'Bei Lieferung' ? 'Pay on delivery' : 'Unpaid';
+    const order = await client.query(`INSERT INTO orders (user_id,assigned_staff_id,address_snapshot,total_cents,payment_method,payment_status,delivery_status,discount_code_id,discount_code,discount_cents) VALUES ($1,$2,$3,$4,$5,$6,'Not Started',$7,$8,$9) RETURNING *`, [res.locals.user.id, assignedStaffId, address, total, paymentMethod, paymentStatus, couponResult?.coupon?.id || null, couponResult?.code || null, discountCents]);
+    if (couponResult?.valid) {
+      await client.query('UPDATE discount_codes SET used_count = used_count + 1 WHERE id=$1', [couponResult.coupon.id]);
+      await client.query('INSERT INTO discount_code_redemptions (discount_code_id,order_id,user_id,code,discount_cents) VALUES ($1,$2,$3,$4,$5)', [couponResult.coupon.id, order.rows[0].id, res.locals.user.id, couponResult.code, discountCents]);
+    }
+    for (const item of cart.rows) {
+      await client.query(`INSERT INTO order_items (order_id,product_id,product_name,variant_name,variety,unit_price_cents,purchase_price_cents,discount_percent,staff_note_snapshot,quantity) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [order.rows[0].id, item.id, item.name, item.variant_name || null, item.variant_name || '', item.price_cents, item.purchase_price_cents || 0, item.discount_percent, item.staff_note || '', item.quantity]);
+      if (item.variant_id) await client.query('UPDATE product_variants SET stock=stock-$1 WHERE id=$2', [item.quantity, item.variant_id]);
+      else await client.query('UPDATE products SET stock=stock-$1 WHERE id=$2', [item.quantity, item.id]);
+    }
+    await client.query('DELETE FROM carts WHERE user_id=$1', [res.locals.user.id]);
+    req.session.couponCode = null;
+    await client.query('COMMIT');
+    res.redirect('/orders/' + order.rows[0].id);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(400).send(err.message);
+  } finally { client.release(); }
+});
+
+async function loadOrderForUser(orderId, user) {
+  let orderQ;
+  if (user.role === 'owner') {
+    orderQ = await pool.query('SELECT o.*, u.email, u.full_name, s.full_name AS assigned_staff_name FROM orders o JOIN users u ON u.id=o.user_id LEFT JOIN users s ON s.id=o.assigned_staff_id WHERE o.id=$1', [orderId]);
+  } else if (user.role === 'staff') {
+    orderQ = await pool.query('SELECT o.*, u.email, u.full_name, s.full_name AS assigned_staff_name FROM orders o JOIN users u ON u.id=o.user_id LEFT JOIN users s ON s.id=o.assigned_staff_id WHERE o.id=$1 AND o.assigned_staff_id=$2', [orderId, user.id]);
+  } else {
+    orderQ = await pool.query('SELECT o.*, u.email, u.full_name, s.full_name AS assigned_staff_name FROM orders o JOIN users u ON u.id=o.user_id LEFT JOIN users s ON s.id=o.assigned_staff_id WHERE o.id=$1 AND o.user_id=$2', [orderId, user.id]);
+  }
+  return orderQ.rows[0];
+}
+
+app.get('/orders', requireLogin, async (req, res) => {
+  const { rows } = await pool.query(`
+    SELECT o.*, COALESCE(items.items_text,'') AS items_text
+    FROM orders o
+    LEFT JOIN (
+      SELECT order_id, string_agg(product_name || COALESCE(' (' || NULLIF(variant_name,'') || ')','') || ' ×' || quantity || ' = ' || to_char(((unit_price_cents*(100-discount_percent)/100)*quantity)/100.0, 'FM999999990.00') || '€', ', ' ORDER BY product_name) AS items_text
+      FROM order_items GROUP BY order_id
+    ) items ON items.order_id=o.id
+    WHERE o.user_id=$1 AND archived_by_customer=false ORDER BY created_at DESC`, [res.locals.user.id]);
+  res.render('orders', { title: 'Meine Bestellungen', orders: rows });
+});
+app.get('/orders/:id', requireLogin, async (req, res) => {
+  const order = await loadOrderForUser(req.params.id, res.locals.user);
+  if (!order) return res.status(404).send('Bestellung nicht gefunden');
+  if (res.locals.isCustomer) await pool.query('UPDATE orders SET customer_seen_at=now() WHERE id=$1', [order.id]);
+  const items = await pool.query(`SELECT oi.*, p.staff_note AS current_staff_note FROM order_items oi LEFT JOIN products p ON p.id=oi.product_id WHERE oi.order_id=$1 ORDER BY oi.product_name, oi.variant_name NULLS LAST`, [order.id]);
+  const messages = await pool.query('SELECT m.*, u.full_name, u.role FROM messages m JOIN users u ON u.id=m.sender_id WHERE order_id=$1 ORDER BY m.created_at ASC', [order.id]);
+  const review = await pool.query('SELECT * FROM reviews WHERE order_id=$1', [order.id]);
+  let productsForOrder = [];
+  if (res.locals.isStaff) {
+    const pq = await pool.query('SELECT id,name,price_cents FROM products WHERE active=true ORDER BY name');
+    productsForOrder = pq.rows;
+  }
+  res.render('order-detail', { title: 'Bestellung', order, items: items.rows, messages: messages.rows, review: review.rows[0], productsForOrder });
+});
+app.post('/orders/:id/message', requireLogin, async (req, res) => {
+  const order = await loadOrderForUser(req.params.id, res.locals.user);
+  if (!order) return res.status(404).send('Nicht gefunden');
+  await pool.query('INSERT INTO messages (order_id,sender_id,body) VALUES ($1,$2,$3)', [order.id, res.locals.user.id, req.body.body]);
+  await pool.query('UPDATE orders SET updated_at=now() WHERE id=$1', [order.id]);
+  await emailNewMessage(order, res.locals.user, req.body.body);
+  res.redirect('/orders/' + order.id);
+});
+app.post('/orders/:id/review', requireLogin, requireCustomer, async (req, res) => {
+  const order = await loadOrderForUser(req.params.id, res.locals.user);
+  if (!order || order.delivery_status !== 'Delivered') return res.status(403).send('Bewertung noch nicht möglich.');
+  await pool.query('INSERT INTO reviews (order_id,user_id,rating,comment) VALUES ($1,$2,$3,$4) ON CONFLICT (order_id) DO UPDATE SET rating=$3, comment=$4', [order.id, res.locals.user.id, parseInt(req.body.rating,10), req.body.comment]);
+  res.redirect('/orders/' + order.id);
+});
+app.post('/orders/:id/archive', requireLogin, async (req, res) => {
+  const order = await loadOrderForUser(req.params.id, res.locals.user);
+  if (!order) return res.status(404).send('Nicht gefunden');
+  const column = res.locals.isStaff ? 'archived_by_staff' : 'archived_by_customer';
+  await pool.query(`UPDATE orders SET ${column}=true WHERE id=$1`, [order.id]);
+  res.redirect(res.locals.isStaff ? '/staff/orders' : '/orders');
+});
+
+app.post('/staff/order-items/:itemId/prepared', requireStaff, async (req, res) => {
+  const { rows } = await pool.query(`
+    SELECT oi.id, oi.order_id, o.assigned_staff_id
+    FROM order_items oi
+    JOIN orders o ON o.id=oi.order_id
+    WHERE oi.id=$1
+  `, [req.params.itemId]);
+  const item = rows[0];
+  if (!item) return res.status(404).send('Artikel nicht gefunden');
+  if (!res.locals.isOwner && item.assigned_staff_id !== res.locals.user.id) return res.status(403).send('Diese Bestellung ist nicht dir zugeteilt.');
+  await pool.query('UPDATE order_items SET prepared=$1 WHERE id=$2', [req.body.prepared === 'on', item.id]);
+  res.redirect('/orders/' + item.order_id);
+});
+
+app.get('/staff', requireStaff, async (req, res) => {
+  const filter = res.locals.isOwner ? '' : 'AND assigned_staff_id=$1';
+  const params = res.locals.isOwner ? [] : [res.locals.user.id];
+  const stats = await pool.query(`SELECT
+    (SELECT COUNT(*)::int FROM orders WHERE archived_by_staff=false AND delivery_status <> 'Delivered' AND status <> 'Denied' ${filter}) orders,
+    (SELECT COUNT(*)::int FROM orders WHERE status='Placed' ${filter}) placed,
+    (SELECT COUNT(*)::int FROM orders WHERE status='Accepted' AND delivery_status <> 'Delivered' ${filter}) accepted,
+    (SELECT COUNT(*)::int FROM orders WHERE delivery_status='Delivered' ${filter}) delivered,
+    (SELECT COUNT(*)::int FROM products WHERE active=true) products,
+    (SELECT COUNT(*)::int FROM users WHERE role='premcustomer' OR premium=true) premium,
+    (SELECT COUNT(*)::int FROM users WHERE role IN ('owner','staff')) staff`, params);
+  res.render('staff-dashboard', { title: 'Staff Übersicht', stats: stats.rows[0] });
+});
+app.get('/staff/products', requireStaff, async (req, res) => {
+  const selectedCategory = req.query.kategorie || '';
+  const sort = req.query.sort || 'created_desc';
+  const filters = {
+    image: req.query.image || '',
+    description: req.query.description || '',
+    supplier: req.query.supplier || '',
+    category: req.query.kategorie || ''
+  };
+  const categories = await pool.query('SELECT * FROM categories ORDER BY name');
+  const where = [];
+  const params = [];
+  if (selectedCategory) { params.push(selectedCategory); where.push(`p.category_id=$${params.length}`); }
+  if (filters.image === 'yes') where.push(`p.image_url IS NOT NULL AND p.image_url <> ''`);
+  if (filters.image === 'no') where.push(`(p.image_url IS NULL OR p.image_url = '')`);
+  if (filters.description === 'yes') where.push(`p.description <> ''`);
+  if (filters.description === 'no') where.push(`p.description = ''`);
+  if (filters.supplier === 'yes') where.push(`COALESCE(TRIM(p.supplier_url),'') <> ''`);
+  if (filters.supplier === 'no') where.push(`COALESCE(TRIM(p.supplier_url),'') = ''`);
+  const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const orderBy = productSortSql(sort);
+  const products = await pool.query(`
+    SELECT p.*, c.name AS category_name,
+      COALESCE((SELECT SUM(v.stock) FROM product_variants v WHERE v.product_id = p.id), p.stock)::int AS display_stock,
+      COALESCE((SELECT SUM(oi.quantity) FROM order_items oi WHERE oi.product_id=p.id),0)::int AS sold_count,
+      COALESCE((SELECT COUNT(*) FROM reviews r JOIN order_items oi ON oi.order_id=r.order_id WHERE oi.product_id=p.id),0)::int AS review_count
+    FROM products p
+    LEFT JOIN categories c ON c.id=p.category_id
+    ${whereSql}
+    ORDER BY ${orderBy}
+  `, params);
+  const productsWithVariants = await attachVariants(products.rows);
+  res.render('staff-products', { title: 'Produkte bearbeiten', products: productsWithVariants, categories: categories.rows, selectedCategory, sort, filters, checked: req.query.checked || '', supplierDebug: req.query.supplierDebug || '' });
+});
+
+app.post('/staff/products/discount', requireStaff, async (req, res) => {
+  const discount = Math.max(0, Math.min(100, safeStockInt(req.body.discount_percent)));
+  const categoryId = req.body.category_id || null;
+  if (categoryId) await pool.query('UPDATE products SET discount_percent=$1 WHERE category_id=$2', [discount, categoryId]);
+  else await pool.query('UPDATE products SET discount_percent=$1', [discount]);
+  res.redirect('/staff/products' + (categoryId ? '?kategorie=' + encodeURIComponent(categoryId) : ''));
+});
+
+app.post('/staff/products/profit-category', requireStaff, async (req, res) => {
+  // Wichtig: $1 muss im SQL eindeutig typisiert werden.
+  // Sonst kann PostgreSQL denselben Parameter einmal als INT und einmal als NUMERIC deuten
+  // und wir bekommen: inconsistent types deduced for parameter $1.
+  const profit = Math.max(0, Math.round(Number(req.body.target_profit_percent) || 0));
+  const categoryId = req.body.category_id || '';
+  if (!categoryId || !isUuid(categoryId)) return res.redirect('/staff/products');
+
+  // Verkaufspreis = Einkaufspreis + Profit %. Nur Produkte mit Einkaufspreis > 0 werden angepasst.
+  await pool.query(`
+    UPDATE products
+    SET target_profit_percent=$1::int,
+        price_cents=GREATEST(0, ROUND(purchase_price_cents::numeric * (1 + ($1::numeric / 100.0)))::int)
+    WHERE category_id=$2::uuid AND COALESCE(purchase_price_cents,0) > 0
+  `, [profit, categoryId]);
+  res.redirect('/staff/products?kategorie=' + encodeURIComponent(categoryId));
+});
+
+app.post('/staff/products', requireStaff, upload.single('image'), async (req, res) => {
+  const { name, description, price, stock, discount_percent, category_id, purchase_price, staff_note, supplier_url } = req.body;
+  const cents = priceToCents(price);
+  const purchaseCents = priceToCents(purchase_price);
+  const targetProfit = profitPercentFromPrices(cents, purchaseCents);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const finalCategoryId = await categoryOrDefault(category_id, client);
+    const product = await client.query('INSERT INTO products (name,description,price_cents,purchase_price_cents,target_profit_percent,stock,discount_percent,image_url,category_id,staff_note,supplier_url) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id', [name, description, cents, purchaseCents, targetProfit, safeStockInt(stock), safeStockInt(discount_percent), null, finalCategoryId, staff_note || '', supplier_url || '']);
+    const productId = product.rows[0].id;
+    const imageUrl = req.file ? await storeProductImage(req.file, productId) : null;
+    if (imageUrl) await client.query('UPDATE products SET image_url=$1 WHERE id=$2', [imageUrl, productId]);
+    await replaceProductVariants(client, productId, parseVariants(req.body.variants));
+    await syncProductStock(client, productId);
+    await client.query('COMMIT');
+    res.redirect(productRedirect(req, productId));
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(400).send(err.message);
+  } finally { client.release(); }
+});
+app.post('/staff/products/check-suppliers', requireStaff, async (req, res) => {
+  const checked = await checkAllSupplierStatuses({ force: true });
+  // Manuelle Refreshs ändern den globalen Homepage-Cooldown absichtlich nicht.
+  res.redirect('/staff/products?checked=' + checked);
+});
+
+app.post('/staff/products/:id', requireStaff, requireUuidParam, upload.single('image'), async (req, res) => {
+  const { name, description, price, stock, discount_percent, active, category_id, purchase_price, staff_note, supplier_url } = req.body;
+  const cents = priceToCents(price);
+  const purchaseCents = priceToCents(purchase_price);
+  const targetProfit = profitPercentFromPrices(cents, purchaseCents);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const finalCategoryId = await categoryOrDefault(category_id, client);
+    const imageUrl = req.file ? await storeProductImage(req.file, req.params.id) : req.body.old_image_url || null;
+    await client.query('UPDATE products SET name=$1, description=$2, price_cents=$3, purchase_price_cents=$4, target_profit_percent=$5, stock=$6, discount_percent=$7, active=$8, image_url=$9, category_id=$10, staff_note=$11, supplier_url=$12 WHERE id=$13', [name, description, cents, purchaseCents, targetProfit, safeStockInt(stock), safeStockInt(discount_percent), active === 'on', imageUrl, finalCategoryId, staff_note || '', supplier_url || '', req.params.id]);
+    await replaceProductVariants(client, req.params.id, parseVariants(req.body.variants));
+    await syncProductStock(client, req.params.id);
+    await client.query('COMMIT');
+    if ((req.get('accept') || '').includes('application/json') || req.get('x-requested-with') === 'fetch') return res.json({ ok: true, id: req.params.id });
+    res.redirect(productRedirect(req, req.params.id));
+  } catch (err) {
+    await client.query('ROLLBACK');
+    if ((req.get('accept') || '').includes('application/json') || req.get('x-requested-with') === 'fetch') return res.status(400).json({ ok: false, error: err.message });
+    res.status(400).send(err.message);
+  } finally { client.release(); }
+});
+
+app.post('/staff/products/:id/delete', requireOwner, requireUuidParam, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const productQ = await client.query('SELECT id, name FROM products WHERE id=$1 FOR UPDATE', [req.params.id]);
+    const product = productQ.rows[0];
+    if (!product) {
+      await client.query('ROLLBACK');
+      return res.status(404).send('Produkt nicht gefunden');
+    }
+    await client.query('DELETE FROM products WHERE id=$1', [req.params.id]);
+    await client.query('COMMIT');
+    await deleteProductImage(req.params.id);
+    res.redirect('/staff/products');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).send('Produkt konnte nicht gelöscht werden.');
+  } finally { client.release(); }
+});
+
+
+app.post('/staff/products/:id/check-supplier', requireStaff, requireUuidParam, async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM products WHERE id=$1', [req.params.id]);
+  const product = rows[0];
+  if (!product) return res.status(404).send('Produkt nicht gefunden');
+  const result = await checkSupplierStatus(product, { force: true });
+  if ((req.get('accept') || '').includes('application/json')) return res.json({ ok: true, result });
+  res.redirect(productRedirect(req, req.params.id));
+});
+
+app.post('/staff/products/:id/variants', requireStaff, requireUuidParam, async (req, res) => {
+  const names = Array.isArray(req.body.variant_name) ? req.body.variant_name : [req.body.variant_name];
+  const stocks = Array.isArray(req.body.variant_stock) ? req.body.variant_stock : [req.body.variant_stock];
+  const ids = Array.isArray(req.body.variant_id) ? req.body.variant_id : [req.body.variant_id];
+  for (let i = 0; i < names.length; i++) {
+    const name = String(names[i] || '').trim();
+    const stock = safeStockInt(stocks[i]);
+    const id = ids[i];
+    if (!id || !name) continue;
+    await pool.query('UPDATE product_variants SET name=$1, stock=$2 WHERE id=$3 AND product_id=$4', [name, stock, id, req.params.id]);
+  }
+  const newName = String(req.body.new_variant_name || '').trim();
+  if (newName) {
+    await pool.query('INSERT INTO product_variants (product_id,name,stock) VALUES ($1,$2,$3) ON CONFLICT (product_id,name) DO UPDATE SET stock=EXCLUDED.stock', [req.params.id, newName, safeStockInt(req.body.new_variant_stock)]);
+  }
+  await syncProductStock(pool, req.params.id);
+  if ((req.get('accept') || '').includes('application/json') || req.get('x-requested-with') === 'fetch') return res.json({ ok: true, id: req.params.id });
+  res.redirect(productRedirect(req, req.params.id));
+});
+app.post('/staff/variants/:id/delete', requireStaff, async (req, res) => {
+  const { rows } = await pool.query('DELETE FROM product_variants WHERE id=$1 RETURNING product_id', [req.params.id]);
+  if (rows[0]?.product_id) await syncProductStock(pool, rows[0].product_id);
+  res.redirect('/staff/products' + (rows[0]?.product_id ? '#produkt-' + rows[0].product_id : ''));
+});
+
+app.get('/staff/categories', requireStaff, async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM categories ORDER BY name');
+  res.render('staff-categories', { title: 'Kategorien', categories: rows });
+});
+app.post('/staff/categories', requireStaff, async (req, res) => {
+  await pool.query('INSERT INTO categories (name,description,active) VALUES ($1,$2,true) ON CONFLICT (name) DO UPDATE SET description=$2, active=true', [req.body.name, req.body.description || '']);
+  res.redirect('/staff/categories');
+});
+app.post('/staff/categories/:id', requireStaff, async (req, res) => {
+  await pool.query('UPDATE categories SET name=$1, description=$2, active=$3 WHERE id=$4', [req.body.name, req.body.description || '', req.body.active === 'on', req.params.id]);
+  res.redirect('/staff/categories');
+});
+
+app.get('/staff/orders', requireStaff, async (req, res) => {
+  const filter = req.query.filter || 'Placed';
+  const whereByFilter = {
+    Placed: "o.status='Placed' AND o.delivery_status <> 'Delivered'",
+    Accepted: "o.status='Accepted' AND o.delivery_status <> 'Delivered'",
+    Denied: "o.status='Denied'",
+    Paid: "o.payment_status='Paid' AND o.delivery_status <> 'Delivered' AND o.status <> 'Denied'",
+    Unpaid: "o.payment_status='Unpaid' AND o.delivery_status <> 'Delivered' AND o.status <> 'Denied'",
+    'Delivery in Progress': "o.delivery_status='Delivery in Progress' AND o.status <> 'Denied'",
+    Delivered: "o.delivery_status='Delivered' AND o.status <> 'Denied'"
+  }[filter] || "o.status='Placed'";
+  const params = [];
+  let staffWhere = '';
+  if (!res.locals.isOwner) { params.push(res.locals.user.id); staffWhere = `AND o.assigned_staff_id=$${params.length}`; }
+  const { rows } = await pool.query(`
+    SELECT o.*, u.email, u.full_name, s.full_name AS assigned_staff_name, COALESCE(prep.prepared_count,0)::int AS prepared_count, COALESCE(prep.item_count,0)::int AS item_count
+    FROM orders o
+    JOIN users u ON u.id=o.user_id
+    LEFT JOIN users s ON s.id=o.assigned_staff_id
+    LEFT JOIN (SELECT order_id, COUNT(*)::int AS item_count, COUNT(*) FILTER (WHERE prepared)::int AS prepared_count FROM order_items GROUP BY order_id) prep ON prep.order_id=o.id
+    WHERE o.archived_by_staff=false AND ${whereByFilter} ${staffWhere}
+    ORDER BY o.created_at DESC`, params);
+  res.render('staff-orders', { title: 'Bestellungen', orders: rows, filter });
+});
+app.post('/staff/orders/:id/update', requireStaff, async (req, res) => {
+  const beforeQ = await pool.query('SELECT * FROM orders WHERE id=$1', [req.params.id]);
+  const before = beforeQ.rows[0];
+  if (!before) return res.status(404).send('Bestellung nicht gefunden');
+  if (!res.locals.isOwner && before.assigned_staff_id !== res.locals.user.id) return res.status(403).send('Diese Bestellung ist nicht dir zugeteilt.');
+
+  let status = before.status;
+  let payment_status = before.payment_status;
+  let delivery_status = before.delivery_status;
+
+  if (req.body.action === 'accept') {
+    status = 'Accepted';
+    delivery_status = before.delivery_status === 'Not Started' ? 'Delivery in Progress' : before.delivery_status;
+  } else if (req.body.action === 'deny') {
+    status = 'Denied';
+    delivery_status = 'Not Started';
+  } else {
+    if (req.body.status) status = req.body.status;
+    if (status === 'Accepted') {
+      if (before.payment_method === 'Bei Lieferung') payment_status = 'Pay on delivery';
+      else if (req.body.payment_status) payment_status = req.body.payment_status;
+      if (req.body.delivery_status) delivery_status = req.body.delivery_status;
+    } else {
+      payment_status = before.payment_method === 'Bei Lieferung' ? 'Pay on delivery' : 'Unpaid';
+      delivery_status = 'Not Started';
+    }
+  }
+
+  await pool.query('UPDATE orders SET status=$1,payment_status=$2,delivery_status=$3,updated_at=now() WHERE id=$4', [status, payment_status, delivery_status, req.params.id]);
+  const after = (await pool.query('SELECT * FROM orders WHERE id=$1', [req.params.id])).rows[0];
+  await emailOrderStatusUpdate(req.params.id, before, after);
+  if (before.delivery_status !== 'Delivered' && delivery_status === 'Delivered') {
+    await pool.query(`UPDATE users SET delivered_order_count = delivered_order_count + 1,
+      premium = CASE WHEN delivered_order_count + 1 >= 5 THEN true ELSE premium END,
+      role = CASE WHEN delivered_order_count + 1 >= 5 AND role='customer' THEN 'premcustomer' ELSE role END
+      WHERE id=$1`, [before.user_id]);
+  }
+  res.redirect('/staff/orders?filter=' + encodeURIComponent(status === 'Denied' ? 'Denied' : (delivery_status === 'Delivered' ? 'Delivered' : status))); 
+});
+
+
+app.post('/staff/orders/:id/meeting', requireStaff, async (req, res) => {
+  const before = (await pool.query('SELECT * FROM orders WHERE id=$1', [req.params.id])).rows[0];
+  if (!before) return res.status(404).send('Bestellung nicht gefunden');
+  if (!res.locals.isOwner && before.assigned_staff_id !== res.locals.user.id) return res.status(403).send('Diese Bestellung ist nicht dir zugeteilt.');
+  let meetingAt = null;
+  if (req.body.meeting_at) {
+    const q = await pool.query(`SELECT ($1::timestamp AT TIME ZONE 'Europe/Berlin') AS meeting_at`, [req.body.meeting_at]);
+    meetingAt = q.rows[0].meeting_at;
+  }
+  await pool.query('UPDATE orders SET meeting_location=$1, meeting_at=$2, meeting_note=$3, updated_at=now() WHERE id=$4', [req.body.meeting_location || '', meetingAt, req.body.meeting_note || '', req.params.id]);
+  await emailMeetingUpdate(req.params.id);
+  res.redirect('/orders/' + req.params.id);
+});
+
+app.post('/staff/orders/:id/costs', requireOwner, async (req, res) => {
+  await pool.query('UPDATE orders SET extra_cost_cents=$1, extra_cost_note=$2, updated_at=now() WHERE id=$3', [priceToCents(req.body.extra_cost), req.body.extra_cost_note || '', req.params.id]);
+  res.redirect('/orders/' + req.params.id);
+});
+
+app.post('/staff/order-items/:itemId/update', requireStaff, async (req, res) => {
+  const q = await pool.query('SELECT oi.*, o.assigned_staff_id, o.delivery_status FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE oi.id=$1', [req.params.itemId]);
+  const item = q.rows[0];
+  if (!item) return res.status(404).send('Artikel nicht gefunden');
+  if (!res.locals.isOwner && item.assigned_staff_id !== res.locals.user.id) return res.status(403).send('Diese Bestellung ist nicht dir zugeteilt.');
+  if (item.delivery_status === 'Delivered') return res.status(400).send('Gelieferte Bestellungen können nicht mehr bearbeitet werden.');
+  const qty = Math.max(1, parseInt(req.body.quantity || '1', 10));
+  const unit = priceToCents(req.body.unit_price);
+  await pool.query('UPDATE order_items SET quantity=$1, unit_price_cents=$2 WHERE id=$3', [qty, unit, item.id]);
+  await pool.query('UPDATE orders SET total_cents=(SELECT COALESCE(SUM(ROUND(unit_price_cents*(100-discount_percent)/100.0)*quantity),0)::int FROM order_items WHERE order_id=$1) - discount_cents, updated_at=now() WHERE id=$1', [item.order_id]);
+  res.redirect('/orders/' + item.order_id);
+});
+
+app.post('/staff/order-items/:itemId/delete', requireStaff, async (req, res) => {
+  const q = await pool.query('SELECT oi.*, o.assigned_staff_id, o.delivery_status FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE oi.id=$1', [req.params.itemId]);
+  const item = q.rows[0];
+  if (!item) return res.status(404).send('Artikel nicht gefunden');
+  if (!res.locals.isOwner && item.assigned_staff_id !== res.locals.user.id) return res.status(403).send('Diese Bestellung ist nicht dir zugeteilt.');
+  if (item.delivery_status === 'Delivered') return res.status(400).send('Gelieferte Bestellungen können nicht mehr bearbeitet werden.');
+  await pool.query('DELETE FROM order_items WHERE id=$1', [item.id]);
+  await pool.query('UPDATE orders SET total_cents=(SELECT COALESCE(SUM(ROUND(unit_price_cents*(100-discount_percent)/100.0)*quantity),0)::int FROM order_items WHERE order_id=$1) - discount_cents, updated_at=now() WHERE id=$1', [item.order_id]);
+  res.redirect('/orders/' + item.order_id);
+});
+
+app.post('/staff/orders/:id/add-item', requireStaff, async (req, res) => {
+  const order = (await pool.query('SELECT * FROM orders WHERE id=$1', [req.params.id])).rows[0];
+  if (!order) return res.status(404).send('Bestellung nicht gefunden');
+  if (!res.locals.isOwner && order.assigned_staff_id !== res.locals.user.id) return res.status(403).send('Diese Bestellung ist nicht dir zugeteilt.');
+  if (order.delivery_status === 'Delivered') return res.status(400).send('Gelieferte Bestellungen können nicht mehr bearbeitet werden.');
+  const product = (await pool.query('SELECT * FROM products WHERE id=$1', [req.body.product_id])).rows[0];
+  if (!product) return res.status(404).send('Produkt nicht gefunden');
+  let variantName = null;
+  if (req.body.variant_id) {
+    const v = (await pool.query('SELECT * FROM product_variants WHERE id=$1 AND product_id=$2', [req.body.variant_id, product.id])).rows[0];
+    variantName = v?.name || null;
+  }
+  const qty = Math.max(1, parseInt(req.body.quantity || '1', 10));
+  await pool.query(`INSERT INTO order_items (order_id,product_id,product_name,variant_name,variety,unit_price_cents,purchase_price_cents,discount_percent,staff_note_snapshot,quantity)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [order.id, product.id, product.name, variantName, variantName || '', product.price_cents, product.purchase_price_cents || 0, product.discount_percent || 0, product.staff_note || '', qty]);
+  await pool.query('UPDATE orders SET total_cents=(SELECT COALESCE(SUM(ROUND(unit_price_cents*(100-discount_percent)/100.0)*quantity),0)::int FROM order_items WHERE order_id=$1) - discount_cents, updated_at=now() WHERE id=$1', [order.id]);
+  res.redirect('/orders/' + order.id);
+});
+
+app.post('/staff/orders/:id/delete', requireOwner, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const orderQ = await client.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE', [req.params.id]);
+    const order = orderQ.rows[0];
+    if (!order) {
+      await client.query('ROLLBACK');
+      return res.status(404).send('Bestellung nicht gefunden');
+    }
+    if (req.body.restore_stock === 'on' && order.delivery_status !== 'Delivered') {
+      const items = await client.query('SELECT product_id, variant_name, quantity FROM order_items WHERE order_id=$1', [order.id]);
+      for (const item of items.rows) {
+        if (!item.product_id) continue;
+        if (item.variant_name) await client.query('UPDATE product_variants SET stock = stock + $1 WHERE product_id=$2 AND name=$3', [item.quantity, item.product_id, item.variant_name]);
+        else await client.query('UPDATE products SET stock = stock + $1 WHERE id=$2', [item.quantity, item.product_id]);
+      }
+    }
+    await client.query('DELETE FROM orders WHERE id=$1', [order.id]);
+    await client.query('COMMIT');
+    res.redirect('/staff/orders?filter=' + encodeURIComponent(req.body.return_filter || 'Placed'));
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).send('Bestellung konnte nicht gelöscht werden.');
+  } finally { client.release(); }
+});
+
+app.get('/staff/discount-codes', requireOwner, async (req, res) => {
+  const codes = await pool.query(`SELECT dc.*, c.name AS category_name, u.email AS account_email, creator.full_name AS creator_name
+    FROM discount_codes dc
+    LEFT JOIN categories c ON c.id=dc.category_id
+    LEFT JOIN users u ON u.id=dc.account_specific_user_id
+    LEFT JOIN users creator ON creator.id=dc.created_by
+    ORDER BY dc.created_at DESC`);
+  const categories = await pool.query('SELECT * FROM categories ORDER BY name');
+  const users = await pool.query("SELECT id,email,full_name,role FROM users WHERE role IN ('customer','premcustomer') ORDER BY created_at DESC LIMIT 200");
+  res.render('staff-discount-codes', { title: 'Rabattcodes', codes: codes.rows, categories: categories.rows, users: users.rows, error: req.query.error || null });
+});
+app.post('/staff/discount-codes', requireOwner, async (req, res) => {
+  const code = normalizeCode(req.body.code);
+  if (!code) return res.redirect('/staff/discount-codes?error=' + encodeURIComponent('Code fehlt.'));
+  const discountType = req.body.discount_mode === 'percent' ? 'percent' : req.body.discount_mode === 'fixed' ? 'fixed' : 'none';
+  const discountPercent = discountType === 'percent' ? Math.max(0, Math.min(100, safeStockInt(req.body.discount_percent))) : 0;
+  const discountCents = discountType === 'fixed' ? priceToCents(req.body.discount_euro) : 0;
+  const maxDiscountCents = req.body.enable_max_discount === 'on' ? euroInputToNullableCents(req.body.max_discount_euro) : null;
+  const buyX = req.body.enable_bxgy === 'on' ? Math.max(0, parseInt(req.body.buy_x || '0', 10)) : 0;
+  const getY = req.body.enable_bxgy === 'on' ? Math.max(0, parseInt(req.body.get_y || '0', 10)) : 0;
+  const accountId = req.body.enable_account === 'on' && req.body.account_specific_user_id ? req.body.account_specific_user_id : null;
+  const categoryId = req.body.enable_category === 'on' && req.body.category_id ? req.body.category_id : null;
+  const minOrderCents = req.body.enable_min_order === 'on' ? priceToCents(req.body.min_order_euro) : 0;
+  const maxUses = req.body.enable_max_uses === 'on' ? intOrNull(req.body.max_uses) : null;
+
+  let expiresAt = null;
+  if (req.body.expiry_mode === 'duration') {
+    const d = Math.max(0, parseInt(req.body.duration_days || '0', 10));
+    const h = Math.max(0, parseInt(req.body.duration_hours || '0', 10));
+    const m = Math.max(0, parseInt(req.body.duration_minutes || '0', 10));
+    const sec = Math.max(0, parseInt(req.body.duration_seconds || '0', 10));
+    if (d || h || m || sec) {
+      const q = await pool.query(`SELECT now() + make_interval(days=>$1, hours=>$2, mins=>$3, secs=>$4) AS expires_at`, [d,h,m,sec]);
+      expiresAt = q.rows[0].expires_at;
+    }
+  } else if (req.body.expiry_mode === 'until' && req.body.expires_at_local) {
+    const q = await pool.query(`SELECT ($1::timestamp AT TIME ZONE 'Europe/Berlin') AS expires_at`, [req.body.expires_at_local]);
+    expiresAt = q.rows[0].expires_at;
+  }
+
+  try {
+    const created = await pool.query(`INSERT INTO discount_codes (code,description,active,discount_type,discount_percent,discount_cents,max_discount_cents,buy_x,get_y,account_specific_user_id,category_id,min_order_cents,expires_at,max_uses,created_by)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+      [code, req.body.description || '', req.body.active === 'on', discountType, discountPercent, discountCents, maxDiscountCents, buyX, getY, accountId, categoryId, minOrderCents, expiresAt, maxUses, res.locals.user.id]);
+    if (req.body.active === 'on') {
+      emailDiscountCodeCreated(created.rows[0].id).catch(err => console.error('[Mail Fehler] Rabattcode-Mail:', err.message));
+    }
+    res.redirect('/staff/discount-codes');
+  } catch (err) {
+    console.error(err);
+    res.redirect('/staff/discount-codes?error=' + encodeURIComponent('Rabattcode konnte nicht erstellt werden. Vielleicht existiert der Code schon.'));
+  }
+});
+app.post('/staff/discount-codes/:id/toggle', requireOwner, async (req, res) => {
+  await pool.query('UPDATE discount_codes SET active = NOT active WHERE id=$1', [req.params.id]);
+  res.redirect('/staff/discount-codes');
+});
+app.post('/staff/discount-codes/:id/delete', requireOwner, async (req, res) => {
+  await pool.query('DELETE FROM discount_codes WHERE id=$1', [req.params.id]);
+  res.redirect('/staff/discount-codes');
+});
+
+app.get('/staff/customers', requireStaff, async (req, res) => {
+  const type = req.query.type || 'customers';
+  const where = type === 'premium' ? "WHERE role='premcustomer' OR premium=true" : type === 'staff' ? "WHERE role IN ('owner','staff')" : "WHERE role='customer' AND premium=false";
+  const { rows } = await pool.query(`
+    SELECT id,email,full_name,street,postal_code,city,role,premium,delivered_order_count,created_at,banned,ban_reason,internal_note,
+      EXISTS(SELECT 1 FROM ban_rules br WHERE br.type='email' AND br.value=lower(users.email)) AS email_banned,
+      EXISTS(SELECT 1 FROM ban_rules br WHERE br.type='identity' AND br.value=lower(trim(coalesce(users.full_name,'') || '|' || coalesce(users.street,'') || '|' || coalesce(users.postal_code,'') || '|' || coalesce(users.city,'')))) AS identity_banned
+    FROM users ${where}
+    ORDER BY created_at DESC`);
+  res.render('staff-customers', { title: 'Nutzer', customers: rows, type });
+});
+app.post('/staff/users/:id/role', requireOwner, async (req, res) => {
+  const allowed = ['owner','staff','customer','premcustomer'];
+  const role = allowed.includes(req.body.role) ? req.body.role : 'customer';
+  const premium = role === 'premcustomer' || role === 'owner';
+  await pool.query('UPDATE users SET role=$1, premium=$2 WHERE id=$3', [role, premium, req.params.id]);
+  res.redirect('/staff/customers');
+});
+
+
+
+app.post('/staff/users/:id/note', requireStaff, async (req, res) => {
+  await pool.query('UPDATE users SET internal_note=$1 WHERE id=$2', [req.body.internal_note || '', req.params.id]);
+  res.redirect('/staff/customers?type=' + encodeURIComponent(req.body.return_type || 'customers'));
+});
+
+app.post('/staff/users/:id/ban', requireOwner, async (req, res) => {
+  const user = (await pool.query('SELECT * FROM users WHERE id=$1', [req.params.id])).rows[0];
+  if (!user) return res.status(404).send('Nutzer nicht gefunden');
+  const reason = req.body.ban_reason || 'Gesperrt';
+  const emailValue = String(user.email || '').toLowerCase();
+  const identityValue = identityKey(user.full_name, user.street, user.postal_code, user.city);
+
+  const bannedNow = req.body.banned === 'on';
+  await pool.query('UPDATE users SET banned=$1, ban_reason=$2 WHERE id=$3', [bannedNow, reason, user.id]);
+
+  if (user.banned !== bannedNow) {
+    emailBanUpdate(user, reason, bannedNow).catch(err => console.error('[Mail Fehler] Ban-Mail:', err.message));
+  }
+
+  if (req.body.ban_email === 'on') {
+    await pool.query(`INSERT INTO ban_rules (type,value,reason,created_by)
+      SELECT $1,$2,$3,$4 WHERE NOT EXISTS (SELECT 1 FROM ban_rules WHERE type=$1 AND value=$2)`,
+      ['email', emailValue, reason, res.locals.user.id]);
+  } else {
+    await pool.query('DELETE FROM ban_rules WHERE type=$1 AND value=$2', ['email', emailValue]);
+  }
+
+  if (req.body.ban_identity === 'on') {
+    await pool.query(`INSERT INTO ban_rules (type,value,reason,created_by)
+      SELECT $1,$2,$3,$4 WHERE NOT EXISTS (SELECT 1 FROM ban_rules WHERE type=$1 AND value=$2)`,
+      ['identity', identityValue, reason, res.locals.user.id]);
+  } else {
+    await pool.query('DELETE FROM ban_rules WHERE type=$1 AND value=$2', ['identity', identityValue]);
+  }
+
+  res.redirect('/staff/customers?type=' + encodeURIComponent(req.body.return_type || 'customers'));
+});
+
+app.post('/staff/ban-ip', requireOwner, async (req, res) => {
+  const value = String(req.body.ip || '').trim();
+  if (value) await pool.query('INSERT INTO ban_rules (type,value,reason,created_by) VALUES ($1,$2,$3,$4)', ['ip', value, req.body.reason || '', res.locals.user.id]);
+  res.redirect('/staff/customers?type=' + encodeURIComponent(req.body.return_type || 'customers'));
+});
+
+app.post('/staff/users/:id/reset-link', requireOwner, async (req, res) => {
+  const user = (await pool.query('SELECT id,email,full_name,role FROM users WHERE id=$1', [req.params.id])).rows[0];
+  if (!user) return res.status(404).send('Nutzer nicht gefunden');
+  const token = await createPasswordReset(user.id, res.locals.user.id);
+  await sendMail(user.email, 'Premium Shop: Passwort-Reset vom Owner', `<h2>Passwort zurücksetzen</h2><p>Hallo ${escapeHtml(user.full_name)},</p><p>Der Owner hat einen Passwort-Reset-Link für dich erstellt:</p><p><a href="${escapeHtml(resetUrl(token))}">${escapeHtml(resetUrl(token))}</a></p><p>Der Link ist 2 Stunden gültig.</p>`);
+  res.redirect('/staff/customers?reset=sent');
+});
+
+app.get('/staff/profit', requireOwner, async (req, res) => {
+  const { rows } = await pool.query(`
+    WITH order_finance AS (
+      SELECT o.id, o.created_at, o.extra_cost_cents,
+        COALESCE(SUM(ROUND(oi.unit_price_cents*(100-oi.discount_percent)/100.0)*oi.quantity),0)::int AS revenue,
+        COALESCE(SUM(oi.purchase_price_cents*oi.quantity),0)::int AS cost,
+        COALESCE(SUM((ROUND(oi.unit_price_cents*(100-oi.discount_percent)/100.0)-oi.purchase_price_cents)*oi.quantity),0)::int AS gross_profit
+      FROM orders o JOIN order_items oi ON oi.order_id=o.id
+      WHERE o.delivery_status='Delivered' AND o.status='Accepted'
+      GROUP BY o.id
+    )
+    SELECT
+      COALESCE(SUM(CASE WHEN created_at >= date_trunc('day', now()) THEN gross_profit-extra_cost_cents ELSE 0 END),0)::int AS day_profit,
+      COALESCE(SUM(CASE WHEN created_at >= date_trunc('week', now()) THEN gross_profit-extra_cost_cents ELSE 0 END),0)::int AS week_profit,
+      COALESCE(SUM(CASE WHEN created_at >= date_trunc('month', now()) THEN gross_profit-extra_cost_cents ELSE 0 END),0)::int AS month_profit,
+      COALESCE(SUM(gross_profit-extra_cost_cents),0)::int AS total_profit,
+      COALESCE(SUM(revenue),0)::int AS total_revenue,
+      COALESCE(SUM(cost),0)::int AS total_cost,
+      COALESCE(SUM(extra_cost_cents),0)::int AS total_extra_cost
+    FROM order_finance
+  `);
+  const items = await pool.query(`
+    SELECT oi.product_name, COALESCE(oi.variant_name,'') AS variant_name, SUM(oi.quantity)::int AS qty,
+      COALESCE(SUM(ROUND(oi.unit_price_cents*(100-oi.discount_percent)/100.0) * oi.quantity),0)::int AS revenue,
+      COALESCE(SUM(oi.purchase_price_cents * oi.quantity),0)::int AS cost,
+      COALESCE(SUM((ROUND(oi.unit_price_cents*(100-oi.discount_percent)/100.0) - oi.purchase_price_cents) * oi.quantity),0)::int AS profit
+    FROM orders o JOIN order_items oi ON oi.order_id=o.id
+    WHERE o.delivery_status='Delivered' AND o.status='Accepted'
+    GROUP BY oi.product_name, oi.variant_name
+    ORDER BY profit DESC
+  `);
+  const extraOrders = await pool.query(`SELECT id, created_at, extra_cost_cents, extra_cost_note, total_cents FROM orders WHERE delivery_status='Delivered' AND status='Accepted' AND extra_cost_cents > 0 ORDER BY created_at DESC LIMIT 50`);
+  res.render('staff-profit', { title: 'Profit', summary: rows[0], items: items.rows, extraOrders: extraOrders.rows });
+});
+
+app.get('/bewertungen', async (_, res) => {
+  const { rows } = await pool.query('SELECT r.*, u.full_name FROM reviews r JOIN users u ON u.id=r.user_id ORDER BY r.created_at DESC LIMIT 50');
+  res.render('reviews', { title: 'Bewertungen', reviews: rows });
+});
+
+app.get('/health', (_, res) => res.json({ ok: true }));
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`Premium Shop läuft auf Port ${port}`);
+  if (cloudinaryConfigured) {
+    console.log('[Cloudinary] Bildspeicher ist aktiv. Produktbilder werden dauerhaft bei Cloudinary gespeichert.');
+  } else {
+    console.warn(`[Cloudinary] Nicht aktiv. Fehlende Variablen: ${cloudinaryMissingKeys.join(', ')}. Uploads werden blockiert, außer LOCAL_IMAGE_FALLBACK=true ist gesetzt.`);
+  }
+  if (mailersendConfigured) console.log('[Mail] MailerSend API ist aktiv.');
+  else if (smtpConfigured) console.log('[Mail] SMTP ist aktiv.');
+  else console.warn('[Mail] Nicht aktiv. Setze MAILERSEND_API_KEY und MAIL_FROM.');
+});
