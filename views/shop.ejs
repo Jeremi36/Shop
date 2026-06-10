@@ -1,0 +1,50 @@
+<%- include('layout-top') %>
+<section class="hero"><h1>Willkommen im Premium Shop</h1><p>Bestellen, Liefertermin per Nachricht abstimmen und Status live verfolgen.</p></section>
+<section class="panel">
+  <h2>Kategorien & Sortierung</h2>
+  <div class="chips"><a class="chip <%= !selectedCategory ? 'active' : '' %>" href="/?sort=<%= sort || 'created_desc' %>">Alle</a><% categories.forEach(c => { %><a class="chip <%= selectedCategory===c.id ? 'active' : '' %>" href="/?kategorie=<%= c.id %>&sort=<%= sort || 'created_desc' %>"><%= c.name %></a><% }) %></div>
+  <form method="get" action="/" class="inline" style="margin-top:12px">
+    <% if (selectedCategory) { %><input type="hidden" name="kategorie" value="<%= selectedCategory %>"><% } %>
+    <label>Sortieren nach
+      <select name="sort" onchange="this.form.submit()">
+        <option value="created_desc" <%= sort==='created_desc'?'selected':'' %>>Neueste zuerst</option>
+        <option value="price_asc" <%= sort==='price_asc'?'selected':'' %>>Preis aufsteigend</option>
+        <option value="price_desc" <%= sort==='price_desc'?'selected':'' %>>Preis absteigend</option>
+        <option value="name_asc" <%= sort==='name_asc'?'selected':'' %>>Name A-Z</option>
+        <option value="name_desc" <%= sort==='name_desc'?'selected':'' %>>Name Z-A</option>
+        <option value="views_desc" <%= sort==='views_desc'?'selected':'' %>>Meist betrachtet</option>
+      </select>
+    </label>
+  </form>
+</section>
+<div class="grid">
+<% products.forEach(p => { const variants = (p.variants || []).filter(v=>v.active); const stock = variants.length ? variants.reduce((s,v)=>s+Number(v.stock||0),0) : p.stock; %>
+  <article class="card product">
+    <a class="product-image-box" href="/produkte/<%= p.id %>"><% if (p.image_url) { %><img class="product-image" src="<%= p.image_url %>" alt="<%= p.name %>"><% } else { %><div class="placeholder">Kein Bild</div><% } %></a>
+    <p class="muted"><%= p.category_name || 'Allgemein' %></p>
+    <h2><a href="/produkte/<%= p.id %>"><%= p.name %></a></h2><p class="product-description fit-description" data-fit-text><%= p.description %></p>
+    <% if (variants.length) { %><p class="muted">Sorten: <%= variants.map(v => v.name + ' (' + v.stock + ')').join(', ') %></p><% } %>
+    <p><% if (p.discount_percent > 0) { %><span class="old"><%= money(p.price_cents) %></span> <b><%= money(discounted(p)) %></b> <span class="sale">-<%= p.discount_percent %>%</span><% } else { %><b><%= money(p.price_cents) %></b><% } %></p>
+    <p class="muted">Lager: <%= stock %> · Aufrufe: <%= p.views_count || 0 %></p>
+    <% if (p.supplier_status === 'out_of_stock') { %><p class="error">Beim Händler leer</p><% } %>
+    <% if (isCustomer) { %><form method="post" action="/cart/add/<%= p.id %>" class="inline"><% if (variants.length) { %><select name="variant_id" required><option value="">Sorte wählen</option><% variants.forEach(v => { %><option value="<%= v.id %>"><%= v.name %> · Lager <%= v.stock %></option><% }) %></select><% } %><input type="number" name="quantity" min="1" max="<%= stock %>" value="1"><button <%= stock <= 0 ? 'disabled' : '' %>>In den Warenkorb</button></form><% } else if (!user) { %><a class="btn" href="/login">Einloggen zum Kaufen</a><% } %>
+  </article>
+<% }) %>
+</div>
+
+<script>
+(function(){
+  function fitText(el){
+    let size = 14;
+    el.style.fontSize = size + 'px';
+    while (size > 9 && el.scrollHeight > el.clientHeight) {
+      size -= 1;
+      el.style.fontSize = size + 'px';
+    }
+  }
+  function run(){ document.querySelectorAll('[data-fit-text]').forEach(fitText); }
+  window.addEventListener('load', run);
+  window.addEventListener('resize', run);
+})();
+</script>
+<%- include('layout-bottom') %>
