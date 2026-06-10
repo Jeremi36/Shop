@@ -1,0 +1,119 @@
+<%- include('layout-top') %>
+<h1>Produkte bearbeiten</h1>
+
+<section class="panel">
+  <h2>Massen-Discount einstellen</h2>
+  <form method="post" action="/staff/products/discount" class="inline">
+    <select name="category_id">
+      <option value="">Alle Kategorien</option>
+      <% categories.forEach(c=>{ %><option value="<%= c.id %>" <%= selectedCategory===c.id?'selected':'' %>><%= c.name %></option><% }) %>
+    </select>
+    <input name="discount_percent" type="number" min="0" max="100" value="0">
+    <button>Rabatt anwenden</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Produkt hinzufügen</h2>
+  <form method="post" action="/staff/products" enctype="multipart/form-data" class="stack product-price-form">
+    <input name="name" placeholder="Name" required>
+    <textarea name="description" placeholder="Beschreibung"></textarea>
+    <textarea name="staff_note" placeholder="Interne Staff/Owner-Notiz, z.B. Nachbestell-Link, Lieferant, Hinweise"></textarea>
+    <input name="supplier_url" placeholder="Nachbestell-/Händler-Link (nur Staff/Owner)">
+    <select name="category_id"><option value="">Ohne Kategorie</option><% categories.forEach(c=>{ %><option value="<%= c.id %>"><%= c.name %></option><% }) %></select>
+    <textarea name="variants" placeholder="Sorten, eine pro Zeile oder mit Komma getrennt&#10;z.B. Cola&#10;Orange&#10;Kirsche"></textarea>
+    <label>Verkaufspreis <input class="vp-input" name="price" placeholder="z.B. 4,99" required></label>
+    <label>Einkaufspreis <input class="kp-input" name="purchase_price" placeholder="z.B. 2,50"></label>
+    <label>Profit % <input class="profit-input" name="target_profit_percent" type="number" min="0" step="1" placeholder="wird automatisch berechnet"></label>
+    <input name="stock" type="number" min="0" placeholder="Lagerbestand ohne Sorten" required>
+    <label>Rabatt % <input name="discount_percent" type="number" min="0" max="100" value="0"></label>
+    <input name="image" type="file" accept="image/*">
+    <button>Hinzufügen</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Kategorien</h2>
+  <p><a class="btn" href="/staff/categories">Kategorien verwalten</a></p>
+  <div class="chips">
+    <a class="chip <%= !selectedCategory?'active':'' %>" href="/staff/products">Alle</a>
+    <% categories.forEach(c=>{ %><a class="chip <%= selectedCategory===c.id?'active':'' %>" href="/staff/products?kategorie=<%= c.id %>"><%= c.name %></a><% }) %>
+  </div>
+</section>
+
+<% products.forEach(p=>{ const variants = (p.variants || []).filter(v => v.active).map(v => v.name).join('\n'); %>
+  <section class="panel">
+    <form method="post" action="/staff/products/<%= p.id %>" enctype="multipart/form-data" class="stack product-price-form">
+      <h2><%= p.name %></h2>
+      <p class="muted">Produkt-ID: <code><%= p.id %></code></p>
+      <% if (p.image_url) { %><img src="<%= p.image_url %>" alt="<%= p.name %>" style="max-width:180px;border-radius:12px"><% } %>
+      <input type="hidden" name="old_image_url" value="<%= p.image_url || '' %>">
+      <input name="name" value="<%= p.name %>">
+      <textarea name="description"><%= p.description %></textarea>
+      <label>Interne Staff/Owner-Notiz<textarea name="staff_note" placeholder="z.B. Nachbestell-Link, Lieferant, Packhinweise"><%= p.staff_note || '' %></textarea></label>
+      <label>Nachbestell-/Händler-Link<input name="supplier_url" value="<%= p.supplier_url || '' %>" placeholder="https://..."></label>
+      <% if (p.supplier_url) { %><p><a href="<%= p.supplier_url %>" target="_blank" rel="noopener">Händler-Link öffnen</a></p><% } %>
+      <% if (p.staff_note) { %><div class="notice"><b>Interne Notiz:</b><pre><%= p.staff_note %></pre></div><% } %>
+      <label>Kategorie
+        <select name="category_id"><option value="">Ohne Kategorie</option><% categories.forEach(c=>{ %><option value="<%= c.id %>" <%= p.category_id===c.id?'selected':'' %>><%= c.name %></option><% }) %></select>
+      </label>
+      <label>Sorten<textarea name="variants" placeholder="Eine Sorte pro Zeile oder mit Komma getrennt"><%= variants %></textarea></label>
+      <label>Verkaufspreis <input class="vp-input" name="price" value="<%= (p.price_cents/100).toFixed(2).replace('.',',') %>" placeholder="Verkaufspreis"></label>
+      <label>Einkaufspreis <input class="kp-input" name="purchase_price" value="<%= ((p.purchase_price_cents||0)/100).toFixed(2).replace('.',',') %>" placeholder="Einkaufspreis"></label>
+      <label>Profit % <input class="profit-input" name="target_profit_percent" type="number" min="0" step="1" value="<%= p.target_profit_percent || 0 %>" placeholder="Profit %"></label>
+      <label>Lager ohne Sorten <input name="stock" type="number" min="0" value="<%= p.stock %>"></label>
+      <label>Rabatt % <input name="discount_percent" type="number" min="0" max="100" value="<%= p.discount_percent %>"></label>
+      <label>Aktiv <input type="checkbox" name="active" <%= p.active?'checked':'' %>></label>
+      <input name="image" type="file" accept="image/*">
+      <button>Speichern</button>
+    </form>
+
+    <% if (isOwner) { %>
+      <form method="post" action="/staff/products/<%= p.id %>/delete" onsubmit="return confirm('Produkt wirklich permanent löschen? Das Produktbild wird auch gelöscht. Alte Bestellungen behalten nur den gespeicherten Produktnamen.');" class="inline" style="margin-top:12px">
+        <button class="danger">Produkt permanent löschen</button>
+      </form>
+    <% } %>
+  </section>
+
+  <% if ((p.variants||[]).length) { %>
+    <section class="panel">
+      <h3>Sorten-Lager für <%= p.name %></h3>
+      <form method="post" action="/staff/products/<%= p.id %>/variants" class="stack">
+        <% p.variants.forEach(v=>{ %><div class="inline"><input type="hidden" name="variant_id" value="<%= v.id %>"><input name="variant_name" value="<%= v.name %>"><input name="variant_stock" type="number" min="0" value="<%= v.stock %>"></div><% }) %>
+        <div class="inline"><input name="new_variant_name" placeholder="Neue Sorte"><input name="new_variant_stock" type="number" min="0" value="0"></div>
+        <button>Sorten speichern</button>
+      </form>
+    </section>
+  <% } %>
+<% }) %>
+
+<script>
+(function(){
+  function parseEuro(v){ return Math.max(0, Number(String(v || '0').replace(',', '.')) || 0); }
+  function fmtEuro(v){ return (Math.round(v * 100) / 100).toFixed(2).replace('.', ','); }
+  function bind(form){
+    const vp = form.querySelector('.vp-input');
+    const kp = form.querySelector('.kp-input');
+    const pr = form.querySelector('.profit-input');
+    if (!vp || !kp || !pr) return;
+    function updateProfit(){
+      const sell = parseEuro(vp.value);
+      const buy = parseEuro(kp.value);
+      if (buy <= 0) { pr.value = '0'; return; }
+      pr.value = Math.max(0, Math.round(((sell - buy) / buy) * 100));
+    }
+    function updatePrice(){
+      const buy = parseEuro(kp.value);
+      const profit = Math.max(0, Number(pr.value) || 0);
+      vp.value = fmtEuro(buy * (1 + profit / 100));
+    }
+    vp.addEventListener('input', updateProfit);
+    kp.addEventListener('input', updateProfit);
+    pr.addEventListener('input', updatePrice);
+    updateProfit();
+  }
+  document.querySelectorAll('.product-price-form').forEach(bind);
+})();
+</script>
+
+<%- include('layout-bottom') %>

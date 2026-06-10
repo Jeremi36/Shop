@@ -1,0 +1,73 @@
+<%- include('layout-top') %>
+<h1>Rabattcodes</h1>
+<p><a class="btn" href="/staff">Zurück zur Staff Übersicht</a></p>
+<% if (error) { %><p class="error"><%= error %></p><% } %>
+
+<section class="panel">
+  <h2>Rabattcode hinzufügen</h2>
+  <form method="post" action="/staff/discount-codes" class="stack">
+    <div class="three">
+      <label>Code<input name="code" placeholder="z.B. AMBERG10" required></label>
+      <label>Beschreibung<input name="description" placeholder="Optional, intern sichtbar"></label>
+      <label>Aktiv <input type="checkbox" name="active" checked></label>
+    </div>
+
+    <h3>Rabattart</h3>
+    <div class="three">
+      <label><input type="radio" name="discount_mode" value="none" checked> Kein direkter Rabatt</label>
+      <label><input type="radio" name="discount_mode" value="percent"> Rabatt in % <input name="discount_percent" type="number" min="0" max="100" value="0"></label>
+      <label><input type="radio" name="discount_mode" value="fixed"> Rabatt in € <input name="discount_euro" placeholder="z.B. 5,00"></label>
+    </div>
+
+    <h3>Optionale Spezifikationen</h3>
+    <div class="three">
+      <label><input type="checkbox" name="enable_max_discount"> Maximaler Rabatt<input name="max_discount_euro" placeholder="z.B. 20,00"></label>
+      <label><input type="checkbox" name="enable_bxgy"> Buy X get Y<div class="inline"><input name="buy_x" type="number" min="0" value="0" placeholder="Buy X"><input name="get_y" type="number" min="0" value="0" placeholder="Get Y"></div></label>
+      <label><input type="checkbox" name="enable_min_order"> Mindesteinkaufswert<input name="min_order_euro" placeholder="z.B. 30,00"></label>
+    </div>
+
+    <div class="three">
+      <label><input type="checkbox" name="enable_account"> Account-spezifisch<select name="account_specific_user_id"><option value="">Account auswählen</option><% users.forEach(u=>{ %><option value="<%= u.id %>"><%= u.full_name %> · <%= u.email %> · <%= roleLabel(u.role) %></option><% }) %></select></label>
+      <label><input type="checkbox" name="enable_category"> Kategorie-spezifisch<select name="category_id"><option value="">Kategorie auswählen</option><% categories.forEach(c=>{ %><option value="<%= c.id %>"><%= c.name %></option><% }) %></select></label>
+      <label><input type="checkbox" name="enable_max_uses"> Maximale Nutzungen<input name="max_uses" type="number" min="1" placeholder="z.B. 100"></label>
+    </div>
+
+    <h3>Haltbarkeit</h3>
+    <div class="three">
+      <label><input type="radio" name="expiry_mode" value="none" checked> Kein Ablaufdatum</label>
+      <label><input type="radio" name="expiry_mode" value="duration"> Haltbar für Tage:Stunden:Minuten:Sekunden<div class="inline"><input name="duration_days" type="number" min="0" value="0" placeholder="Tage"><input name="duration_hours" type="number" min="0" value="0" placeholder="Std"><input name="duration_minutes" type="number" min="0" value="0" placeholder="Min"><input name="duration_seconds" type="number" min="0" value="0" placeholder="Sek"></div></label>
+      <label><input type="radio" name="expiry_mode" value="until"> Haltbar bis Datum/Uhrzeit Deutschland<input name="expires_at_local" type="datetime-local"></label>
+    </div>
+    <button>Rabattcode erstellen</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Bestehende Rabattcodes</h2>
+  <table>
+    <tr><th>Code</th><th>Rabatt</th><th>Spezifikationen</th><th>Nutzungen</th><th>Haltbar bis</th><th>Status</th><th>Aktion</th></tr>
+    <% codes.forEach(c=>{ %>
+      <tr>
+        <td><b><%= c.code %></b><br><small><%= c.description || '' %></small></td>
+        <td>
+          <% if (c.discount_type === 'percent') { %><%= c.discount_percent %>%<% } else if (c.discount_type === 'fixed') { %><%= money(c.discount_cents) %><% } else { %>-<% } %>
+          <% if (c.buy_x && c.get_y) { %><br>Buy <%= c.buy_x %> get <%= c.get_y %><% } %>
+        </td>
+        <td>
+          <% if (c.max_discount_cents !== null) { %>Max: <%= money(c.max_discount_cents) %><br><% } %>
+          <% if (c.account_specific_user_id) { %>Account: <%= c.account_email %><br><small>ID: <%= c.account_specific_user_id %></small><br><% } %>
+          <% if (c.category_id) { %>Kategorie: <%= c.category_name || c.category_id %><br><% } %>
+          <% if (c.min_order_cents) { %>Min: <%= money(c.min_order_cents) %><br><% } %>
+        </td>
+        <td><%= c.used_count %><%= c.max_uses ? ' / ' + c.max_uses : '' %></td>
+        <td><%= c.expires_at ? new Date(c.expires_at).toLocaleString('de-DE', { timeZone: 'Europe/Berlin' }) : 'Kein Ablauf' %></td>
+        <td><%= c.active ? 'Aktiv' : 'Deaktiviert' %></td>
+        <td class="stack">
+          <form method="post" action="/staff/discount-codes/<%= c.id %>/toggle"><button class="secondary"><%= c.active ? 'Deaktivieren' : 'Aktivieren' %></button></form>
+          <form method="post" action="/staff/discount-codes/<%= c.id %>/delete" onsubmit="return confirm('Rabattcode wirklich löschen? Alte Bestellungen behalten den gespeicherten Code-Text.');"><button class="danger">Löschen</button></form>
+        </td>
+      </tr>
+    <% }) %>
+  </table>
+</section>
+<%- include('layout-bottom') %>
