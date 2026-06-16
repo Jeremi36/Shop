@@ -1,0 +1,15 @@
+<%- include('layout-top') %>
+<div class="panel small"><h1><%= mode === 'login' ? 'Einloggen' : mode === 'register' ? 'Konto erstellen' : mode === 'forgot' ? 'Passwort vergessen' : 'Passwort zurücksetzen' %></h1>
+<% if (typeof error !== 'undefined' && error) { %><p class="error"><%= error %></p><% } %><% if (typeof success !== 'undefined' && success) { %><p class="success"><%= success %></p><% } %>
+<% if (mode === 'forgot') { %>
+<form method="post" action="/forgot-password" class="stack"><label>E-Mail<input name="email" type="email" required></label><button>Reset-Link senden</button></form>
+<% } else if (mode === 'reset') { %>
+<form method="post" action="/reset-password/<%= token %>" class="stack"><label>Neues Passwort<input name="password" type="password" required minlength="6"></label><button>Passwort ändern</button></form>
+<% } else { %>
+<form method="post" action="/<%= mode %>" class="stack">
+<label>E-Mail<input name="email" type="email" required></label><label>Passwort<input name="password" type="password" required minlength="6"></label>
+<% if (mode === 'register') { %><% if (typeof ageRestrictionEnabled !== 'undefined' && ageRestrictionEnabled) { %><p class="notice">Neue Accounts starten als <b>Unverified</b>. 16+/18+ Kategorien können erst nach Staff-Verifizierung gekauft werden.</p><% } %><label>Vollständiger Name<input name="full_name" required></label><label>Straße + Hausnummer<input name="street" required></label><label>PLZ<input name="postal_code" required></label><label>Ort<input name="city" required></label><label>Telefon optional<input name="phone"></label><% } %>
+<button><%= mode === 'login' ? 'Einloggen' : 'Registrieren' %></button></form>
+<% if (mode === 'login') { %><p><a href="/forgot-password">Passwort vergessen?</a></p><% } %>
+<% } %></div>
+<%- include('layout-bottom') %>

@@ -1,0 +1,47 @@
+<%- include('layout-top') %>
+<section class="panel">
+  <p><a href="/">← Zurück zum Shop</a></p>
+  <div class="grid">
+    <div class="product-detail-image-box">
+      <% if (product.image_url) { %><img src="<%= product.image_url %>" alt="<%= product.name %>" class="product-detail-image"><% } else { %><div class="placeholder product-detail-placeholder">Kein Bild</div><% } %>
+    </div>
+    <div>
+      <p class="muted"><%= product.category_name || 'Allgemein' %></p>
+      <h1><%= product.name %></h1>
+      <p><%= product.description %></p>
+      <p><% if (product.discount_percent > 0) { %><span class="old"><%= money(product.price_cents) %></span> <b><%= money(discounted(product)) %></b> <span class="sale">-<%= product.discount_percent %>%</span><% } else { %><b><%= money(product.price_cents) %></b><% } %></p>
+      <div class="grid smallgrid">
+        <div class="card"><h2><%= product.views_count || 0 %></h2><p>Aufrufe</p></div>
+        <div class="card"><h2><%= stats.sold_count || 0 %></h2><p>Gekauft</p></div>
+        <div class="card"><h2><%= stats.avg_rating || 0 %>★</h2><p><%= stats.review_count || 0 %> Bewertungen</p></div>
+      </div>
+      <% if (product.supplier_url && product.supplier_status === 'out_of_stock') { %>
+        <div class="notice"><b>Lager: 0</b></div>
+      <% } %>
+      <% if (isStaff) { %>
+        <div class="notice"><b>Nur Staff/Owner:</b><br>
+          Einkaufspreis: <%= money(product.purchase_price_cents || 0) %> · Profit: <%= product.target_profit_percent || 0 %>%<br>
+          <% if (product.staff_note) { %><b>Notiz:</b><pre><%= product.staff_note %></pre><% } %>
+          <% if (product.supplier_url) { %><a href="<%= product.supplier_url %>" target="_blank" rel="noopener">Nachbestell-Link öffnen</a><% } %>
+        </div>
+      <% } %>
+      <% const stock = variants.length ? variants.reduce((s,v)=>s+Number(v.stock||0),0) : product.stock; %>
+      <% if (isCustomer) { %>
+        <form method="post" action="/cart/add/<%= product.id %>" class="inline panel">
+          <% if (variants.length) { %><select name="variant_id" required><option value="">Sorte wählen</option><% variants.forEach(v => { %><option value="<%= v.id %>"><%= v.name %> · Lager <%= v.stock %></option><% }) %></select><% } %>
+          <input type="number" name="quantity" min="1" max="<%= stock %>" value="1">
+          <button <%= stock <= 0 ? 'disabled' : '' %>>In den Warenkorb</button>
+        </form>
+      <% } else if (!user) { %><a class="btn" href="/login">Einloggen zum Kaufen</a><% } %>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Bewertungen</h2>
+  <% if (!reviews.length) { %><p class="muted">Noch keine Bewertungen.</p><% } %>
+  <% reviews.forEach(r => { %>
+    <div class="card"><b><%= r.rating %>★ · <%= r.full_name %></b><p><%= r.comment || 'Keine Nachricht' %></p><small><%= new Date(r.created_at).toLocaleString('de-DE') %></small></div>
+  <% }) %>
+</section>
+<%- include('layout-bottom') %>
