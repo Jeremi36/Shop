@@ -1,9 +1,0 @@
-<%- include('layout-top') %><h1>Staff Übersicht <% if(staffActionCount){ %><span class="alert">❗ <%= staffActionCount %> neue Bestellungen</span><% } %></h1><div class="grid">
-<% if(hasPermission('can_manage_orders')){ %><a class="card" href="/staff/orders?filter=Placed"><h2><%= stats.placed %></h2><p>Bestellungen</p></a><a class="card" href="/staff/orders?filter=Accepted"><h2><%= stats.accepted %></h2><p>Accepted</p></a><a class="card" href="/staff/orders?filter=Delivered"><h2><%= stats.delivered %></h2><p>Fertige Bestellungen</p></a><% } %>
-<% if(hasPermission('can_edit_products')){ %><a class="card" href="/staff/products"><h2><%= stats.products %></h2><p>Produkte bearbeiten</p></a><% } %>
-<% if(hasPermission('can_manage_users')){ %><a class="card" href="/staff/customers"><h2><%= stats.premium %></h2><p>Nutzer</p></a><% } %>
-<% if(hasPermission('can_manage_support')){ %><a class="card" href="/staff/support"><h2><%= supportActionCount %></h2><p>Customer Support</p></a><% } %>
-<% if(hasPermission('can_manage_gift_cards')){ %><a class="card" href="/staff/gift-cards"><h2>🎁</h2><p>Gutscheine</p></a><% } %>
-<% if(hasPermission('can_manage_discounts')){ %><a class="card" href="/staff/discount-codes"><h2>%</h2><p>Rabattcodes</p></a><% } %>
-<% if(isOwner){ %><a class="card" href="/staff/profit"><h2>€</h2><p>Profit Übersicht</p></a><a class="card" href="/staff/permissions"><h2>🔐</h2><p>Staff-Rechte</p></a><a class="card" href="/staff/settings"><h2>⚙</h2><p>Owner Einstellungen</p></a><a class="card" href="/staff/legal"><h2>§</h2><p>Rechtliche Seiten</p></a><a class="card" href="/staff/audit"><h2>LOG</h2><p>Audit Log</p></a><% } %>
-</div><%- include('layout-bottom') %>
