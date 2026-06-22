@@ -1,0 +1,9 @@
+<%- include('layout-top') %>
+<h1>Audit Log</h1>
+<table><tr><th>Zeit</th><th>User</th><th>Aktion</th><th>Ziel</th><th>Details</th><th>IP</th></tr>
+<% logs.forEach(l => { %><tr>
+<td><%= new Date(l.created_at).toLocaleString('de-DE') %></td>
+<td><%= l.full_name || '-' %><br><small><%= l.email || '' %></small></td>
+<td><%= l.action %></td><td><%= l.target_type %><br><small><%= l.target_id %></small></td><td><%= l.details %></td><td><%= l.ip %></td>
+</tr><% }) %></table>
+<%- include('layout-bottom') %>

@@ -1,0 +1,8 @@
+<%- include('layout-top') %>
+<h1>Customer Support</h1>
+<p class="muted">Offene Conversations werden einem Staff zugeteilt. Owner kann Zuteilungen ändern.</p>
+<div class="chips"><% ['open','waiting_staff','waiting_customer','closed'].forEach(s=>{ %><a class="chip <%= status===s?'active':'' %>" href="/staff/support?status=<%= s %>"><%= s %></a><% }) %></div>
+<table><tr><th>Nr.</th><th>Kunde</th><th>Thema</th><th>Zugewiesen</th><th>Status</th><th>Aktualisiert</th><th></th></tr>
+<% conversations.forEach(c=>{ %><tr><td>#<%= c.conversation_no %></td><td><%= c.customer_name %><br><small><%= c.customer_email %></small></td><td><b><%= c.subject %></b><br><small><%= c.category %></small></td><td><%= c.staff_name || 'Nicht zugeteilt' %></td><td><%= c.status %></td><td><%= new Date(c.updated_at).toLocaleString('de-DE') %></td><td><a class="btn" href="/staff/support/<%= c.id %>">Öffnen</a></td></tr><% }) %>
+</table>
+<%- include('layout-bottom') %>
