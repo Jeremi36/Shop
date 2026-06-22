@@ -1,0 +1,7 @@
+<%- include('layout-top') %>
+<h1>Gutscheinbestellungen</h1>
+<div class="chips"><% ['requested','paid','cancelled'].forEach(s=>{ %><a class="chip <%= status===s?'active':'' %>" href="/staff/gift-cards?status=<%= s %>"><%= s %></a><% }) %></div>
+<table><tr><th>Datum</th><th>Kunde</th><th>Wert</th><th>Nachricht</th><th>Zugewiesen</th><th>Status</th><th>Aktion</th></tr>
+<% orders.forEach(o=>{ %><tr><td><%= new Date(o.created_at).toLocaleString('de-DE') %></td><td><%= o.customer_name %><br><small><%= o.customer_email %></small></td><td><b><%= money(o.amount_cents) %></b></td><td><%= o.custom_message || '-' %></td><td><%= o.staff_name || '-' %></td><td><%= o.status %><% if(o.code){ %><br><code><%= o.code %></code><% } %></td><td><% if(o.status==='requested'){ %><form method="post" action="/staff/gift-cards/<%= o.id %>/paid" class="inline"><button>Als bezahlt markieren + PDF erstellen</button></form><form method="post" action="/staff/gift-cards/<%= o.id %>/cancel"><button class="danger">Stornieren</button></form><% } else if(o.gift_card_id){ %><a href="/gift-cards/<%= o.gift_card_id %>/pdf?token=<%= encodeURIComponent(o.download_token) %>">PDF</a><% } %></td></tr><% }) %>
+</table>
+<%- include('layout-bottom') %>
