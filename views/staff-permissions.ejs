@@ -1,5 +1,0 @@
-<%- include('layout-top') %>
-<h1>Staff-Rechte</h1>
-<p class="muted">Owner hat immer alle Rechte. Neue Staff-Accounts starten mit Bestell-, Support-, Alters-, Termin- und Gutscheinrechten; Preis-, Lösch-, Ban- und Guthabenrechte sind standardmäßig aus.</p>
-<% staffUsers.forEach(st=>{ %><section class="panel permission-card"><h2><%= st.full_name %> <small><%= st.email %></small></h2><form method="post" action="/staff/permissions/<%= st.id %>" class="permission-grid"><% permissionKeys.forEach(key=>{ %><label><input type="checkbox" name="<%= key %>" <%= st[key]?'checked':'' %>> <%= permissionLabels[key] %></label><% }) %><button>Rechte speichern</button></form></section><% }) %>
-<%- include('layout-bottom') %>
