@@ -1,0 +1,16 @@
+<%- include('layout-top') %>
+<h1>Warenkorb</h1>
+<% if (!items.length) { %><section class="panel"><p>Dein Warenkorb ist leer.</p><a class="btn" href="/">Produkte ansehen</a></section><% } else { %>
+<table><tr><th>Produkt</th><th>Sorte</th><th>Menge</th><th>Preis</th><th>Summe</th></tr><% items.forEach(i=>{ %><tr><td><%= i.name %></td><td><%= i.variant_name||'–' %></td><td><form method="post" action="/cart/update/<%= i.cart_id %>" class="inline"><input type="number" name="quantity" min="0" max="<%= i.stock %>" value="<%= i.quantity %>"><button>Ändern</button></form></td><td><%= money(discounted(i)) %></td><td><%= money(discounted(i)*i.quantity) %></td></tr><% }) %></table>
+<section class="panel"><h2>Rabattcode</h2><% if(couponError){ %><p class="error"><%= couponError %></p><% } %><% if(couponSuccess){ %><p class="success"><%= couponSuccess %></p><% } %><% if(couponResult&&couponResult.valid){ %><p><b>Aktiver Code:</b> <%= couponResult.code %> · Rabatt: <%= money(couponResult.discountCents) %></p><form method="post" action="/cart/coupon/remove"><button class="secondary">Rabattcode entfernen</button></form><% } else { %><form method="post" action="/cart/coupon" class="inline"><input name="code" placeholder="Rabattcode eingeben"><button>Anwenden</button></form><% } %></section>
+<div class="notice"><b>Wichtige Bestellhinweise:</b><br>Treffpunkt und Zeitpunkt werden nach der Bestellung abgestimmt. Bei altersbeschränkten Produkten kann das Alter bei der Übergabe erneut geprüft werden. Gesetzliche Verbraucherrechte bleiben unberührt.</div>
+<section class="panel order-totals"><p>Zwischensumme: <b><%= money(subtotal) %></b></p><% if(couponResult&&couponResult.valid){ %><p>Rabatt: <b>−<%= money(couponResult.discountCents) %></b></p><% } %><h2>Vor Guthaben: <%= money(total) %></h2></section>
+<form method="post" action="/orders/place" class="panel stack">
+  <label>Zahlungsart<select name="payment_method"><option>Vorauszahlung</option><% if(user.role==='veteran_customer'||user.role==='og_customer'){ %><option>Bei Lieferung</option><% } %></select></label>
+  <label>Guthaben verwenden – verfügbar: <%= money(availableCredit) %><input name="credit_to_use" type="number" min="0" max="<%= Math.min(availableCredit,total)/100 %>" step="0.01" value="0"></label>
+  <p class="muted">Deckt dein Guthaben den vollständigen Restbetrag, gilt die Bestellung automatisch als bezahlt.</p>
+  <label class="legal-check"><input type="checkbox" name="legal_accept" required> Ich habe die <a href="/legal/agb" target="_blank">AGB</a>, die <a href="/legal/widerruf" target="_blank">Widerrufsbelehrung</a> sowie die Liefer-, Übergabe- und Zahlungsinformationen gelesen und gebe eine zahlungspflichtige Bestellung ab.</label>
+  <button>Zahlungspflichtig bestellen</button>
+</form>
+<% } %>
+<%- include('layout-bottom') %>

@@ -1,0 +1,13 @@
+<%- include('layout-top') %>
+<div class="section-head"><div><h1>Mitteilungen</h1><p class="muted">Bestelländerungen, Supportantworten, Gutscheine, Rabattcodes und Rangaufstiege.</p></div><form method="post" action="/benachrichtigungen/alle-gelesen"><button class="secondary">Alle als gelesen markieren</button></form></div>
+<section class="notification-list">
+  <% if (!items.length) { %><div class="panel"><p class="muted">Du hast noch keine Mitteilungen.</p></div><% } %>
+  <% items.forEach(n=>{ %>
+    <article class="panel notification-card <%= n.read_at?'read':'unread' %>">
+      <div class="section-head"><div><span class="notification-type"><%= n.notification_type %></span><h2><%= n.title %></h2></div><small><%= new Date(n.created_at).toLocaleString('de-DE') %></small></div>
+      <% if(n.body){ %><p><%= n.body %></p><% } %>
+      <div class="inline"><% if(n.link){ %><a class="btn" href="<%= n.link %>">Öffnen</a><% } %><% if(!n.read_at){ %><form method="post" action="/benachrichtigungen/<%= n.id %>/gelesen"><input type="hidden" name="return_to" value="/benachrichtigungen"><button class="secondary">Als gelesen markieren</button></form><% } %></div>
+    </article>
+  <% }) %>
+</section>
+<%- include('layout-bottom') %>

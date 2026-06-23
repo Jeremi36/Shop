@@ -1,0 +1,13 @@
+<%- include('layout-top') %>
+<h1>Rechtliche Seiten bearbeiten</h1>
+<% if (success) { %><p class="success"><%= success %></p><% } %>
+<p class="notice">Wichtig: Diese Texte ersetzen keine Rechtsberatung. Ich kann nicht garantieren, dass du dadurch keine rechtlichen Probleme bekommst.</p>
+<% pages.forEach(page => { %>
+  <form method="post" action="/staff/legal/<%= page.slug %>" class="panel stack">
+    <h2><%= page.slug %></h2>
+    <label>Titel<input name="title" value="<%= page.title %>" required></label>
+    <label>Text<textarea name="body" rows="12"><%= page.body %></textarea></label>
+    <button>Speichern</button>
+  </form>
+<% }) %>
+<%- include('layout-bottom') %>

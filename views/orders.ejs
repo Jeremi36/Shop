@@ -1,0 +1,11 @@
+<%- include('layout-top') %>
+<h1>Meine Bestellungen</h1>
+<h2>Aktive Bestellungen</h2>
+<table><tr><th>Datum</th><th>Bestellung</th><th>Zahlung</th><th>Übergabe</th><th>Treffpunkt</th><th>Artikel</th><th>Gesamt</th><th></th></tr>
+<% orders.filter(o=>o.delivery_status!=='Delivered').forEach(o => { %><tr><td><%= new Date(o.created_at).toLocaleString('de-DE') %></td><td><%= statusDe('status',o.status) %></td><td><%= statusDe('payment_status',o.payment_status) %></td><td><%= statusDe('delivery_status',o.delivery_status) %></td><td><%= o.meeting_location || 'Noch offen' %><br><small><%= o.meeting_at ? new Date(o.meeting_at).toLocaleString('de-DE') : '' %></small></td><td><%= o.items_text || '–' %></td><td><%= money(o.total_cents) %></td><td><a href="/orders/<%= o.id %>">Details</a></td></tr><% }) %>
+</table>
+<h2>Abgeschlossene Bestellungen</h2>
+<table><tr><th>Datum</th><th>Bestellung</th><th>Zahlung</th><th>Übergabe</th><th>Artikel</th><th>Gesamt</th><th></th></tr>
+<% orders.filter(o=>o.delivery_status==='Delivered').forEach(o => { %><tr><td><%= new Date(o.created_at).toLocaleString('de-DE') %></td><td><%= statusDe('status',o.status) %></td><td><%= statusDe('payment_status',o.payment_status) %></td><td><%= statusDe('delivery_status',o.delivery_status) %></td><td><%= o.items_text || '–' %></td><td><%= money(o.total_cents) %></td><td><a href="/orders/<%= o.id %>">Details</a></td></tr><% }) %>
+</table>
+<%- include('layout-bottom') %>
