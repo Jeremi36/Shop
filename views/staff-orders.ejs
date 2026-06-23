@@ -1,0 +1,16 @@
+<%- include('layout-top') %>
+<h1>Bestellungen</h1>
+<% if(hasPermission('can_assign_orders')){ %><p class="notice">Neue Bestellungen werden nicht automatisch zugeteilt. Weise sie hier einem Mitarbeiter zu.</p><% } %>
+<% const filterLabels={Placed:'Neu',Accepted:'Angenommen',Denied:'Abgelehnt',Paid:'Bezahlt',Unpaid:'Nicht bezahlt','Delivery in Progress':'In Bearbeitung',Delivered:'Übergeben'}; %>
+<div class="chips"><% Object.keys(filterLabels).forEach(f=>{ %><a class="chip <%= filter===f?'active':'' %>" href="/staff/orders?filter=<%= encodeURIComponent(f) %>"><%= filterLabels[f] %></a><% }) %></div>
+<table><tr><th>Datum</th><th>Kunde</th><th>Zugewiesen</th><th>Bestellung</th><th>Zahlung</th><th>Übergabe</th><th>Vorbereitet</th><th>Preis</th><th>Aktion</th></tr>
+<% orders.forEach(o=>{ %><tr>
+  <td><%= new Date(o.created_at).toLocaleString('de-DE') %></td>
+  <td><%= o.full_name %><% if(hasPermission('can_view_customer_email')){ %><br><small><%= o.email %></small><% } %></td>
+  <td><%= o.assigned_staff_name||'Nicht zugeteilt' %><% if(hasPermission('can_assign_orders')){ %><form method="post" action="/staff/orders/<%= o.id %>/assign" class="stack compact"><select name="assigned_staff_id"><option value="">Keine Zuteilung</option><% staffUsers.forEach(st=>{ %><option value="<%= st.id %>" <%= o.assigned_staff_id===st.id?'selected':'' %>><%= st.full_name %> · <%= roleLabel(st.role) %></option><% }) %></select><button>Zuteilen und informieren</button></form><% } %></td>
+  <td><%= statusDe('status',o.status) %></td><td><%= statusDe('payment_status',o.payment_status) %></td><td><%= statusDe('delivery_status',o.delivery_status) %><% if(o.meeting_status&&o.meeting_status!=='none'){ %><br><small>Treffpunkt abgestimmt</small><% } %></td>
+  <td><%= o.prepared_count||0 %>/<%= o.item_count||0 %></td>
+  <td><small>Original: <%= money(o.original_total_cents||(o.total_cents+(o.credit_used_cents||0))) %></small><br><small>Guthaben: −<%= money(o.credit_used_cents||0) %></small><br><b>Rest: <%= money(o.total_cents) %></b></td>
+  <td><% if(o.status==='Placed'&&hasPermission('can_accept_orders')){ %><form method="post" action="/staff/orders/<%= o.id %>/update" class="inline"><button name="action" value="accept">Annehmen</button><% if(hasPermission('can_edit_orders')){ %><button name="action" value="deny" class="danger">Ablehnen</button><% } %></form><% } %><a class="btn secondary" href="/orders/<%= o.id %>">Details</a><% if(isOwner){ %><form method="post" action="/staff/orders/<%= o.id %>/delete" class="stack compact" onsubmit="return confirm('Bestellung dauerhaft löschen?')"><input type="hidden" name="return_filter" value="<%= filter %>"><label><input type="checkbox" name="restore_stock"> Lager zurückbuchen</label><button class="danger">Löschen</button></form><% } %></td>
+</tr><% }) %></table>
+<%- include('layout-bottom') %>
