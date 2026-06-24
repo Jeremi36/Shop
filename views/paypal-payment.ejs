@@ -1,0 +1,21 @@
+<%- include('layout-top') %>
+<h1>Mit PayPal bezahlen</h1>
+<section class="panel">
+  <p><b>Bestellnummer:</b> <span id="paypal-reference"><%= orderReference(order) %></span></p>
+  <p><b>Empfänger:</b> <span id="paypal-email"><%= paypalEmail %></span></p>
+  <p><b>Betrag:</b> <span id="paypal-amount"><%= money(order.total_cents) %></span></p>
+  <p><b>Zahlungsstatus:</b> Noch nicht bestätigt</p>
+</section>
+<section class="panel">
+  <h2>Zahlung öffnen</h2>
+  <p>Der PayPal-Link enthält den Empfänger, den offenen Restbetrag und die Bestellnummer. Nach der Zahlung bleibt die Bestellung zunächst als <b>unbezahlt</b> markiert. Der Owner bestätigt den Zahlungseingang anschließend manuell.</p>
+  <% if(paypalSandbox){ %><p class="notice"><b>Testmodus:</b> Der Link öffnet die PayPal-Sandbox. Dabei wird kein echtes Geld übertragen.</p><% } %>
+  <a class="btn" href="<%= paymentUrl %>" target="_blank" rel="noopener noreferrer">PayPal öffnen</a>
+  <a class="btn secondary" href="/orders/<%= order.id %>">Zur Bestellung</a>
+</section>
+<section class="panel">
+  <h2>Wichtig</h2>
+  <p>Prüfe vor dem Absenden in PayPal noch einmal Empfänger, Betrag und Bestellnummer. Die Website wertet keine PayPal-Rückmeldung automatisch aus.</p>
+  <p class="muted">Für Käufe ist die PayPal-Zahlungsart für Waren und Dienstleistungen vorgesehen. Eine Zahlung an Freunde und Familie wird von dieser Website nicht erzwungen.</p>
+</section>
+<%- include('layout-bottom') %>

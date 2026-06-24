@@ -1,0 +1,69 @@
+<%- include('layout-top') %>
+<h1>Rabattcodes</h1>
+<% if(error){ %><p class="error"><%= error %></p><% } %><% if(success){ %><p class="success"><%= success %></p><% } %>
+
+<section class="panel">
+  <h2>Wöchentlichen Rangvorteil erstellen</h2>
+  <p class="muted">Der Code ist innerhalb seiner Zielgruppe für alle gleich, aber pro Kundenkonto nur einmal in der jeweiligen Woche nutzbar. Der Veteranen-Code gilt auch für OG-Kunden.</p>
+  <form method="post" action="/staff/discount-codes/weekly" class="inline">
+    <select name="role"><option value="premcustomer">Premium-Kunden · 5 %</option><option value="veteran_customer">Veteranen- und OG-Kunden · 10 %</option></select>
+    <label><input type="checkbox" name="send_email" checked> Zusätzlich per E-Mail versenden</label>
+    <button>Wochen-Code erstellen</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Neuen Rabattcode erstellen</h2>
+  <% if(user.role==='co_owner'){ %><p class="notice">Co-Owner: höchstens 40 % oder „Kaufe X, erhalte Y“ mit X &gt; Y. Maximale Nutzungen: 1 für eine Person, 25 für eine Rolle, 50 für alle. Abweichende Codes werden dem Owner zur Freigabe vorgeschlagen.</p><% } %>
+  <form method="post" action="/staff/discount-codes" class="stack">
+    <div class="three"><label>Code<input name="code" required placeholder="SOMMER10"></label><label>Beschreibung<input name="description" placeholder="Interner Hinweis"></label><label class="legal-check"><input type="checkbox" name="active" checked> Sofort aktivieren, wenn zulässig</label></div>
+    <fieldset><legend>Rabattart</legend>
+      <label class="legal-check"><input type="radio" name="discount_mode" value="percent" checked> Prozentualer Rabatt</label><input name="discount_percent" type="number" min="0" max="100" value="5">
+      <label class="legal-check"><input type="radio" name="discount_mode" value="fixed"> Fester Euro-Rabatt</label><input name="discount_euro" placeholder="z. B. 5,00">
+      <label class="legal-check"><input type="radio" name="discount_mode" value="none"> Nur „Kaufe X, erhalte Y“</label>
+    </fieldset>
+    <fieldset><legend>Zusätzliche Regeln</legend>
+      <label class="legal-check"><input type="checkbox" name="enable_max_discount"> Höchsten Rabatt begrenzen</label><input name="max_discount_euro" placeholder="Höchster Rabatt in Euro">
+      <label class="legal-check"><input type="checkbox" name="enable_bxgy"> „Kaufe X, erhalte Y“ aktivieren</label><div class="inline"><input name="buy_x" type="number" min="1" placeholder="X"><input name="get_y" type="number" min="1" placeholder="Y"></div>
+      <label class="legal-check"><input type="checkbox" name="enable_min_order"> Mindestbestellwert</label><input name="min_order_euro" placeholder="Mindestbestellwert in Euro">
+      <label class="legal-check"><input type="checkbox" name="enable_max_uses"> Maximale Gesamtzahl an Nutzungen</label><input name="max_uses" type="number" min="1" placeholder="Anzahl">
+      <label class="legal-check"><input type="checkbox" name="per_user_weekly"> Pro Kundenkonto nur einmal je Woche</label>
+    </fieldset>
+    <fieldset><legend>Zielgruppe</legend>
+      <label class="legal-check"><input type="checkbox" name="enable_account"> Nur für eine bestimmte Person</label><select name="account_specific_user_id"><option value="">Person wählen</option><% users.forEach(u=>{ %><option value="<%= u.id %>"><%= u.full_name %> · <%= u.email %> · <%= roleLabel(u.role) %></option><% }) %></select>
+      <label>Oder nur für einen Kundenrang<select name="role_scope"><option value="">Alle Kundenränge</option><% customerRoles.forEach(r=>{ %><option value="<%= r %>"><%= roleLabel(r) %></option><% }) %></select></label>
+      <label class="legal-check"><input type="checkbox" name="enable_category"> Nur für eine Kategorie</label><select name="category_id"><option value="">Kategorie wählen</option><% categories.forEach(c=>{ %><option value="<%= c.id %>"><%= c.name %></option><% }) %></select>
+    </fieldset>
+    <fieldset><legend>Gültigkeit</legend>
+      <label class="legal-check"><input type="radio" name="expiry_mode" value="none" checked> Kein Ablauf</label>
+      <label class="legal-check"><input type="radio" name="expiry_mode" value="duration"> Gültig für</label><div class="four-col"><input name="duration_days" type="number" min="0" value="0" placeholder="Tage"><input name="duration_hours" type="number" min="0" value="0" placeholder="Stunden"><input name="duration_minutes" type="number" min="0" value="0" placeholder="Minuten"><input name="duration_seconds" type="number" min="0" value="0" placeholder="Sekunden"></div>
+      <label class="legal-check"><input type="radio" name="expiry_mode" value="until"> Gültig bis</label><input name="expires_at_local" type="datetime-local">
+    </fieldset>
+    <fieldset><legend>Nachricht an Kunden</legend>
+      <label>Vorlage<select name="message_preset"><option value="custom">Eigene Nachricht</option><option value="prem_weekly">Wöchentlicher Premium-Vorteil</option><option value="veteran_weekly">Wöchentlicher Veteranen-Vorteil</option><option value="welcome">Dankesnachricht</option></select></label>
+      <label>E-Mail-Betreff (optional)<input name="custom_email_subject"></label>
+      <label>Nachricht<textarea name="custom_email_message" placeholder="Persönliche Nachricht"></textarea></label>
+      <label class="legal-check"><input type="checkbox" name="send_email"> Code nach der Freigabe per E-Mail an die Zielgruppe senden</label>
+    </fieldset>
+    <button>Rabattcode erstellen</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Bestehende Rabattcodes</h2>
+  <table><tr><th>Code</th><th>Vorteil</th><th>Zielgruppe und Regeln</th><th>Nutzungen</th><th>Gültigkeit</th><th>Freigabe</th><th>Aktionen</th></tr>
+  <% codes.forEach(c=>{ %><tr>
+    <td><b><%= c.code %></b><br><small><%= c.description||'' %></small><% if(c.creator_name){ %><br><small>Erstellt von <%= c.creator_name %></small><% } %></td>
+    <td><% if(c.discount_type==='percent'){ %><%= c.discount_percent %> % Rabatt<% } else if(c.discount_type==='fixed'){ %><%= money(c.discount_cents) %> Rabatt<% } else { %>Kein direkter Preisrabatt<% } %><% if(c.buy_x&&c.get_y){ %><br>Kaufe <%= c.buy_x %>, erhalte <%= c.get_y %> gratis<% } %></td>
+    <td><% if(c.account_specific_user_id){ %>Nur <%= c.account_email %><% } else if(c.role_scope){ %><%= roleLabel(c.role_scope) %><% if(c.role_scope==='veteran_customer'){ %> und OG-Kunden<% } %><% } else { %>Alle Kunden<% } %><% if(c.category_name){ %><br>Kategorie: <%= c.category_name %><% } %><% if(c.min_order_cents){ %><br>Ab <%= money(c.min_order_cents) %><% } %><% if(c.max_discount_cents!=null){ %><br>Maximal <%= money(c.max_discount_cents) %><% } %><% if(c.per_user_weekly){ %><br>Einmal je Woche und Konto<% } %></td>
+    <td><%= c.used_count||0 %><%= c.max_uses?' / '+c.max_uses:'' %></td>
+    <td><%= c.expires_at?new Date(c.expires_at).toLocaleString('de-DE'):'Ohne Ablauf' %></td>
+    <td><span class="chip <%= c.approval_status==='approved'?'active':'' %>"><%= ({pending:'Wartet auf Owner',approved:'Freigegeben',rejected:'Abgelehnt'}[c.approval_status]||c.approval_status) %></span><br><%= c.active?'Aktiv':'Deaktiviert' %></td>
+    <td class="stack compact">
+      <% if(isOwner&&c.approval_status==='pending'){ %><form method="post" action="/staff/discount-codes/<%= c.id %>/approve" class="inline"><label><input type="checkbox" name="send_email"> Danach versenden</label><button>Annehmen</button></form><form method="post" action="/staff/discount-codes/<%= c.id %>/reject"><button class="danger">Ablehnen</button></form><% } %>
+      <% if(c.approval_status==='approved'){ %><form method="post" action="/staff/discount-codes/<%= c.id %>/send"><button>Jetzt an Zielgruppe senden</button></form><form method="post" action="/staff/discount-codes/<%= c.id %>/toggle"><button class="secondary"><%= c.active?'Deaktivieren':'Aktivieren' %></button></form><% } %>
+      <form method="post" action="/staff/discount-codes/<%= c.id %>/delete" onsubmit="return confirm('Rabattcode wirklich löschen?')"><button class="danger">Löschen</button></form>
+    </td>
+  </tr><% }) %></table>
+</section>
+<%- include('layout-bottom') %>
