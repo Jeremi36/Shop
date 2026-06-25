@@ -1,0 +1,8 @@
+<%- include('layout-top') %>
+<h1>Produktvorschläge</h1>
+<p class="muted">Co-Owner können Produkte vorschlagen. Erst nach Bestätigung durch den Owner werden sie im Shop veröffentlicht.</p>
+<% if(!proposals.length){ %><section class="panel"><p>Keine Vorschläge vorhanden.</p></section><% } %>
+<div class="grid">
+<% proposals.forEach(p=>{ %><article class="panel"><div class="section-head"><h2><%= p.name %></h2><span class="chip <%= p.status==='approved'?'active':'' %>"><%= ({pending:'Wartet auf Prüfung',approved:'Angenommen',rejected:'Abgelehnt'}[p.status]||p.status) %></span></div><p>Vorgeschlagen von <b><%= p.proposer_name %></b> (<%= roleLabel(p.proposer_role) %>)</p><p><%= p.description||'Keine Beschreibung' %></p><p><b>Verkauf:</b> <%= money(p.price_cents) %> · <b>Einkauf:</b> <%= money(p.purchase_price_cents) %> · <b>Lager:</b> <%= p.stock %></p><p><b>Kategorie:</b> <%= p.category_name||'Allgemein' %></p><% if(p.image_url){ %><img class="product-editor-image" src="<%= p.image_url %>" alt="Vorschau"><% } %><% if(p.rejection_reason){ %><p class="error"><%= p.rejection_reason %></p><% } %><% if(isOwner&&p.status==='pending'){ %><form method="post" action="/staff/product-proposals/<%= p.id %>/approve"><button>Annehmen und veröffentlichen</button></form><form method="post" action="/staff/product-proposals/<%= p.id %>/reject" class="stack"><textarea name="reason" placeholder="Grund der Ablehnung"></textarea><button class="danger">Ablehnen</button></form><% } %></article><% }) %>
+</div>
+<%- include('layout-bottom') %>
