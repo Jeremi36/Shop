@@ -1,0 +1,43 @@
+<%- include('layout-top') %>
+<h1>Mit PayPal bezahlen</h1>
+<section class="panel">
+  <p><b>Bestellnummer:</b> <span id="paypal-reference"><%= orderReference(order) %></span> <button type="button" class="secondary" id="copy-paypal-reference">Kopieren</button></p>
+  <% if(paypalEmail){ %><p><b>Empfänger:</b> <span id="paypal-email"><%= paypalEmail %></span></p><% } %>
+  <p><b>Offener Betrag:</b> <span id="paypal-amount"><%= money(order.total_cents) %></span></p>
+  <p><b>Zahlungsstatus:</b> Noch nicht bestätigt</p>
+</section>
+<section class="panel">
+  <h2>Zahlung öffnen</h2>
+  <p>Der PayPal.Me-Link öffnet den richtigen Empfänger und trägt den offenen Restbetrag ein. Trage in PayPal als Nachricht unbedingt die oben angezeigte Bestellnummer ein.</p>
+  <a class="btn" href="<%= paymentUrl %>" target="_blank" rel="noopener noreferrer">PayPal öffnen</a>
+  <a class="btn secondary" href="/orders/<%= order.id %>">Zur Bestellung</a>
+</section>
+<section class="panel">
+  <h2>Wichtig</h2>
+  <p>Kontrolliere vor dem Absenden Empfänger, Betrag und Bestellnummer. Die Website erhält keine automatische PayPal-Bestätigung. Der Owner markiert die Bestellung erst nach der Kontrolle des tatsächlichen Zahlungseingangs als bezahlt.</p>
+  <p class="muted">Die Zahlungsart wird in PayPal ausgewählt. Die Website erzwingt keine persönliche Zahlung und keine bestimmte PayPal-Kategorie.</p>
+</section>
+<script>
+(() => {
+  const button = document.getElementById('copy-paypal-reference');
+  const reference = document.getElementById('paypal-reference');
+  if (!button || !reference) return;
+  button.addEventListener('click', async () => {
+    const value = reference.textContent.trim();
+    try {
+      await navigator.clipboard.writeText(value);
+      button.textContent = 'Kopiert';
+    } catch {
+      const input = document.createElement('input');
+      input.value = value;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand('copy');
+      input.remove();
+      button.textContent = 'Kopiert';
+    }
+    window.setTimeout(() => { button.textContent = 'Kopieren'; }, 1800);
+  });
+})();
+</script>
+<%- include('layout-bottom') %>
