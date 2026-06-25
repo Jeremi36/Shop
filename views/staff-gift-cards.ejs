@@ -1,0 +1,16 @@
+<%- include('layout-top') %>
+<h1>Gutscheinbestellungen</h1>
+<% const labels={requested:'Zahlung ausstehend',paid:'Erstellt',cancelled:'Storniert'}; %>
+<div class="chips"><% Object.keys(labels).forEach(s=>{ %><a class="chip <%= status===s?'active':'' %>" href="/staff/gift-cards?status=<%= s %>"><%= labels[s] %></a><% }) %></div>
+<table><tr><th>Datum</th><th>Kunde</th><th>Wert</th><th>Gestaltung</th><th>Ausgabe</th><th>Zugewiesen</th><th>Status</th><th>Aktion</th></tr>
+<% orders.forEach(o=>{ %><tr>
+  <td><%= new Date(o.created_at).toLocaleString('de-DE') %></td>
+  <td><%= o.customer_name %><% if(hasPermission('can_view_customer_email')){ %><br><small><%= o.customer_email %></small><% } %></td>
+  <td><b><%= money(o.amount_cents) %></b></td>
+  <td><b><%= o.design_theme %></b><br>Für: <%= o.recipient_name||'–' %><br>Von: <%= o.sender_name||'–' %><br><small><%= o.custom_message||'Keine Nachricht' %></small></td>
+  <td><%= o.delivery_method==='email'?'E-Mail an '+o.delivery_email:'PDF im Kundenkonto' %></td>
+  <td><%= o.staff_name||'Nicht zugeteilt' %></td>
+  <td><%= giftStatusDe(o.status) %></td>
+  <td><% if(o.status==='requested'){ %><form method="post" action="/staff/gift-cards/<%= o.id %>/paid"><button>Als bezahlt markieren und PDF erstellen</button></form><form method="post" action="/staff/gift-cards/<%= o.id %>/cancel"><button class="danger">Stornieren</button></form><% } else if(o.gift_card_id&&o.delivery_method!=='email'){ %><a class="btn" href="/gift-cards/<%= o.gift_card_id %>/pdf?token=<%= encodeURIComponent(o.download_token) %>">PDF prüfen</a><% } else if(o.gift_card_id){ %><span class="success">Per E-Mail versendet</span><% } %></td>
+</tr><% }) %></table>
+<%- include('layout-bottom') %>

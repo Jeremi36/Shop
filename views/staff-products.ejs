@@ -1,0 +1,100 @@
+<%- include('layout-top') %>
+<h1><%= hasPermission('can_edit_products') ? 'Produkte bearbeiten' : 'Produkte ansehen' %></h1>
+
+<% if(hasPermission('can_edit_prices')){ %>
+<section class="panel">
+  <h2>Preise einer Kategorie ändern</h2>
+  <div class="grid">
+    <form method="post" action="/staff/products/discount" class="stack">
+      <h3>Rabatt setzen</h3>
+      <select name="category_id"><option value="">Alle Kategorien</option><% categories.forEach(c=>{ %><option value="<%= c.id %>" <%= selectedCategory===c.id?'selected':'' %>><%= c.name %></option><% }) %></select>
+      <input name="discount_percent" type="number" min="0" max="100" value="0" placeholder="Rabatt in Prozent">
+      <button>Rabatt anwenden</button>
+    </form>
+    <form method="post" action="/staff/products/profit-category" class="stack" onsubmit="return confirm('Zielprofit und Verkaufspreise der gesamten Kategorie neu berechnen?')">
+      <h3>Zielprofit setzen</h3>
+      <select name="category_id" required><option value="">Kategorie wählen</option><% categories.forEach(c=>{ %><option value="<%= c.id %>" <%= selectedCategory===c.id?'selected':'' %>><%= c.name %></option><% }) %></select>
+      <input name="target_profit_percent" type="number" min="0" step="1" placeholder="Zielprofit in Prozent" required>
+      <button>Zielprofit anwenden</button>
+    </form>
+  </div>
+</section>
+<% } %>
+
+<% if(hasPermission('can_edit_products')||hasPermission('can_propose_products')){ %>
+<section class="panel">
+  <h2><%= hasPermission('can_edit_products') ? 'Neues Produkt erstellen' : 'Neues Produkt vorschlagen' %></h2>
+  <% if(hasPermission('can_propose_products')&&!hasPermission('can_edit_products')){ %><p class="notice">Der Vorschlag wird erst nach Freigabe durch den Owner im Shop veröffentlicht.</p><% } %>
+  <form method="post" action="/staff/products" enctype="multipart/form-data" class="stack product-price-form">
+    <input type="hidden" name="return_to" value="<%= originalUrl || '/staff/products' %>">
+    <input name="name" placeholder="Produktname" required>
+    <textarea name="description" placeholder="Beschreibung"></textarea>
+    <textarea name="staff_note" placeholder="Interne Notiz"></textarea>
+    <input name="supplier_url" placeholder="Nachkauflink">
+    <select name="category_id"><option value="">Allgemein</option><% categories.forEach(c=>{ %><option value="<%= c.id %>"><%= c.name %></option><% }) %></select>
+    <textarea name="variants" placeholder="Sorten – eine pro Zeile"></textarea>
+    <div class="three">
+      <label>Verkaufspreis<input class="vp-input" name="price" placeholder="4,99" required></label>
+      <label>Einkaufspreis<input class="kp-input" name="purchase_price" placeholder="2,50"></label>
+      <label>Zielprofit<input class="profit-input" name="target_profit_percent" type="number" min="0" step="1" readonly></label>
+    </div>
+    <div class="three"><label>Lager<input name="stock" type="number" min="0" value="0" required></label><label>Rabatt in Prozent<input name="discount_percent" type="number" min="0" max="100" value="0"></label><label>Bild<input name="image" type="file" accept="image/*"></label></div>
+    <button><%= hasPermission('can_edit_products') ? 'Produkt erstellen' : 'Vorschlag absenden' %></button>
+  </form>
+</section>
+<% } %>
+
+<section class="panel">
+  <details <%= (sort && sort !== 'created_desc') || (filters && (filters.image || filters.description || filters.supplier || selectedCategory)) ? 'open' : '' %>>
+    <summary><b>Filter und Sortierung</b></summary>
+    <form method="get" action="/staff/products" class="filter-grid">
+      <label>Sortierung<select name="sort"><option value="created_desc" <%= sort==='created_desc'?'selected':'' %>>Neueste zuerst</option><option value="price_asc" <%= sort==='price_asc'?'selected':'' %>>Preis aufsteigend</option><option value="price_desc" <%= sort==='price_desc'?'selected':'' %>>Preis absteigend</option><option value="name_asc" <%= sort==='name_asc'?'selected':'' %>>Name A–Z</option><option value="name_desc" <%= sort==='name_desc'?'selected':'' %>>Name Z–A</option><option value="views_desc" <%= sort==='views_desc'?'selected':'' %>>Meist betrachtet</option><option value="sold_desc" <%= sort==='sold_desc'?'selected':'' %>>Meist verkauft</option></select></label>
+      <label>Bild<select name="image"><option value="">Egal</option><option value="yes" <%= filters.image==='yes'?'selected':'' %>>Vorhanden</option><option value="no" <%= filters.image==='no'?'selected':'' %>>Fehlt</option></select></label>
+      <label>Beschreibung<select name="description"><option value="">Egal</option><option value="yes" <%= filters.description==='yes'?'selected':'' %>>Vorhanden</option><option value="no" <%= filters.description==='no'?'selected':'' %>>Fehlt</option></select></label>
+      <label>Kategorie<select name="kategorie"><option value="">Alle Kategorien</option><% categories.forEach(c=>{ %><option value="<%= c.id %>" <%= selectedCategory===c.id?'selected':'' %>><%= c.name %></option><% }) %></select></label>
+      <label>Nachkauflink<select name="supplier"><option value="">Egal</option><option value="yes" <%= filters.supplier==='yes'?'selected':'' %>>Vorhanden</option><option value="no" <%= filters.supplier==='no'?'selected':'' %>>Fehlt</option></select></label>
+      <div class="inline"><button>Filtern</button><a class="btn secondary" href="/staff/products">Zurücksetzen</a></div>
+    </form>
+  </details>
+  <p><%= products.length %> Produkte angezeigt</p>
+  <% if(checked){ %><p class="success">Händlerprüfung abgeschlossen: <%= checked %> Produkte geprüft.</p><% } %>
+  <% if(hasPermission('can_edit_products')){ %><form method="post" action="/staff/products/check-suppliers" onsubmit="return confirm('Alle Nachkauflinks prüfen?')"><button>Alle Händler prüfen</button></form><% } %>
+  <% if(isOwner){ %><p><a class="btn" href="/staff/categories">Kategorien verwalten</a></p><% } %>
+</section>
+
+<div class="editor-grid">
+<% products.forEach(p=>{ const variantsText=(p.variants||[]).filter(v=>v.active).map(v=>v.name).join('\n'); %>
+<section class="panel product-editor-card" id="produkt-<%= p.id %>">
+  <div class="section-head"><div><h2><%= p.name %></h2><p class="muted"><%= p.category_name||'Allgemein' %> · <%= p.age_level||0 %>+ · <%= p.product_type==='gift_card'?'Gutschein':'Normales Produkt' %></p></div><a href="/produkte/<%= p.id %>" target="_blank">Kundenseite</a></div>
+  <% if(p.image_url){ %><img src="<%= p.image_url %>" class="product-editor-image" alt="<%= p.name %>"><% } else { %><div class="placeholder small">Kein Bild</div><% } %>
+  <p>Aufrufe: <b><%= p.views_count||0 %></b> · Verkäufe: <b><%= p.sold_count||0 %></b> · Lager: <b><%= p.display_stock??p.stock??0 %></b></p>
+  <% if(hasPermission('can_view_staff_notes')){ %><p><b>Einkaufspreis:</b> <%= money(p.purchase_price_cents||0) %> · <b>Zielprofit:</b> <%= p.target_profit_percent||0 %>%</p><% if(p.supplier_url){ %><p><a href="<%= p.supplier_url %>" target="_blank" rel="noopener">Nachkauflink öffnen</a></p><% } %><% } %>
+
+  <% if(hasPermission('can_edit_products')){ %>
+  <form method="post" action="/staff/products/<%= p.id %>" enctype="multipart/form-data" class="stack product-price-form">
+    <input type="hidden" name="return_to" value="<%= originalUrl || '/staff/products' %>"><input type="hidden" name="old_image_url" value="<%= p.image_url||'' %>">
+    <label>Name<input name="name" value="<%= p.name %>" required></label>
+    <label>Beschreibung<textarea name="description"><%= p.description||'' %></textarea></label>
+    <label>Interne Notiz<textarea name="staff_note"><%= p.staff_note||'' %></textarea></label>
+    <label>Nachkauflink<input name="supplier_url" value="<%= p.supplier_url||'' %>"></label>
+    <label>Kategorie<select name="category_id"><option value="">Allgemein</option><% categories.forEach(c=>{ %><option value="<%= c.id %>" <%= p.category_id===c.id?'selected':'' %>><%= c.name %></option><% }) %></select></label>
+    <label>Sorten<textarea name="variants"><%= variantsText %></textarea></label>
+    <div class="three"><label>Verkaufspreis<input class="vp-input" name="price" value="<%= (p.price_cents/100).toFixed(2).replace('.',',') %>"></label><label>Einkaufspreis<input class="kp-input" name="purchase_price" value="<%= ((p.purchase_price_cents||0)/100).toFixed(2).replace('.',',') %>"></label><label>Zielprofit<input class="profit-input" name="target_profit_percent" value="<%= p.target_profit_percent||0 %>" readonly></label></div>
+    <div class="three"><label>Lager<input name="stock" type="number" min="0" value="<%= p.stock %>"></label><label>Rabatt<input name="discount_percent" type="number" min="0" max="100" value="<%= p.discount_percent||0 %>"></label><label>Neues Bild<input name="image" type="file" accept="image/*"></label></div>
+    <label class="legal-check"><input type="checkbox" name="active" <%= p.active?'checked':'' %>> Im Shop sichtbar</label>
+    <button>Produkt speichern</button>
+  </form>
+  <% } else { %>
+    <p><%= p.description||'Keine Beschreibung' %></p>
+    <% if(hasPermission('can_edit_staff_notes')){ %><form method="post" action="/staff/products/<%= p.id %>/note" class="stack"><label>Interne Notiz<textarea name="staff_note"><%= p.staff_note||'' %></textarea></label><button>Notiz speichern</button></form><% } %>
+  <% } %>
+
+  <% if(hasPermission('can_edit_products')&&p.supplier_url){ %><form method="post" action="/staff/products/<%= p.id %>/check-supplier"><input type="hidden" name="return_to" value="<%= originalUrl || '/staff/products' %>"><button class="secondary">Händlerstatus prüfen</button></form><% } %>
+  <% if(hasPermission('can_delete_products')){ %><form method="post" action="/staff/products/<%= p.id %>/delete" onsubmit="return confirm('Produkt dauerhaft löschen?')"><button class="danger">Produkt löschen</button></form><% } %>
+</section>
+<% }) %>
+</div>
+<script>
+(() => { const parse=v=>Math.max(0,Number(String(v||'0').replace(',','.'))||0); document.querySelectorAll('.product-price-form').forEach(f=>{const vp=f.querySelector('.vp-input'),kp=f.querySelector('.kp-input'),pr=f.querySelector('.profit-input');if(!vp||!kp||!pr)return;const calc=()=>{const b=parse(kp.value),v=parse(vp.value);pr.value=b>0?Math.max(0,Math.round((v-b)/b*100)):0;};vp.addEventListener('input',calc);kp.addEventListener('input',calc);calc();}); })();
+</script>
+<%- include('layout-bottom') %>
