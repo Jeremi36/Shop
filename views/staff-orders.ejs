@@ -1,0 +1,87 @@
+<%- include('layout-top') %>
+<% const filterLabels={Placed:'Neu',Accepted:'Angenommen',Denied:'Abgelehnt',Paid:'Bezahlt',Unpaid:'Nicht bezahlt','Delivery in Progress':'In Bearbeitung',Delivered:'Übergeben'}; %>
+<% const statusClass=(type,value)=>{ if(value==='Denied')return 'red'; if(value==='Paid'||value==='Delivered')return 'green'; if(value==='Placed'||value==='Unpaid')return 'orange'; if(value==='Delivery in Progress')return 'purple'; return 'blue'; }; %>
+<div class="section-head">
+  <div><span class="eyebrow">Mitarbeiterbereich</span><h1>Bestellungen</h1><p class="muted">Status, Zuteilung, Vorbereitung und Zahlung übersichtlich an einem Ort.</p></div>
+  <a class="btn secondary" href="/staff">Zur Mitarbeiterübersicht</a>
+</div>
+<% if(hasPermission('can_assign_orders')){ %><p class="notice"><b>Hinweis:</b> Neue Bestellungen werden nicht automatisch zugeteilt. Weise sie hier einem Mitarbeiter zu.</p><% } %>
+<div class="chips" aria-label="Bestellungen filtern"><% Object.keys(filterLabels).forEach(f=>{ %><a class="chip <%= filter===f?'active':'' %>" href="/staff/orders?filter=<%= encodeURIComponent(f) %>"><%= filterLabels[f] %></a><% }) %></div>
+
+<div class="order-list">
+<% if(!orders.length){ %><section class="panel empty-state"><span>✓</span><h2>Keine Bestellungen in diesem Bereich</h2><p>Für den gewählten Filter gibt es aktuell nichts zu bearbeiten.</p></section><% } %>
+<% orders.forEach(o=>{ const prepared=Number(o.prepared_count||0), itemCount=Number(o.item_count||0), preparedPercent=itemCount?Math.round(prepared/itemCount*100):0; %>
+<article class="staff-order-card <%= o.status==='Placed'?'is-new':'' %>">
+  <header class="staff-order-head">
+    <div>
+      <div class="staff-order-reference"><strong><%= orderReference(o) %></strong><span class="order-date"><%= new Date(o.created_at).toLocaleString('de-DE') %></span></div>
+      <div class="status-row">
+        <span class="status-badge <%= statusClass('status',o.status) %>"><%= statusDe('status',o.status) %></span>
+        <span class="status-badge <%= statusClass('payment',o.payment_status) %>"><%= statusDe('payment_status',o.payment_status) %></span>
+        <span class="status-badge <%= statusClass('delivery',o.delivery_status) %>"><%= statusDe('delivery_status',o.delivery_status) %></span><% if(o.refund_required){ %><span class="status-badge red">Rückzahlung offen</span><% } else if(o.refund_confirmed_at){ %><span class="status-badge green">Rückzahlung erledigt</span><% } %>
+      </div>
+    </div>
+    <a class="btn secondary" href="/orders/<%= o.id %>">Details öffnen</a>
+  </header>
+
+  <div class="staff-order-body">
+    <div class="order-data-block">
+      <span>Kunde</span>
+      <strong><%= o.full_name %></strong>
+      <% if(hasPermission('can_view_customer_email')){ %><small><a href="mailto:<%= o.email %>"><%= o.email %></a></small><% } %>
+    </div>
+    <div class="order-data-block">
+      <span>Zugewiesen</span>
+      <strong><%= o.assigned_staff_name||'Noch nicht zugeteilt' %></strong>
+      <% if(hasPermission('can_assign_orders')){ %>
+      <form method="post" action="/staff/orders/<%= o.id %>/assign" class="inline compact">
+        <select name="assigned_staff_id" aria-label="Mitarbeiter zuweisen"><option value="">Keine Zuteilung</option><% staffUsers.forEach(st=>{ %><option value="<%= st.id %>" <%= o.assigned_staff_id===st.id?'selected':'' %>><%= st.full_name %> · <%= roleLabel(st.role) %></option><% }) %></select>
+        <button>Zuweisen</button>
+      </form>
+      <% } %>
+    </div>
+    <div class="order-data-block">
+      <span>Vorbereitung</span>
+      <strong><%= prepared %> von <%= itemCount %> Positionen</strong>
+      <div class="prepared-meter" aria-label="<%= preparedPercent %> Prozent vorbereitet"><span style="width:<%= preparedPercent %>%"></span></div>
+      <% if(o.meeting_status&&o.meeting_status!=='none'){ %><small>Treffpunkt wird bereits abgestimmt</small><% } %>
+    </div>
+    <div class="order-data-block order-price">
+      <span>Zahlbetrag</span>
+      <strong><%= money(o.total_cents) %></strong>
+      <small><%= o.payment_status==='Paid'?'Zahlung bestätigt':'Noch offen' %></small>
+    </div>
+  </div>
+
+  <footer class="staff-order-actions">
+    <div class="primary-order-actions">
+      <% if(o.status==='Placed'&&hasPermission('can_accept_orders')&&o.payment_status!=='Paid'){ %>
+        <form method="post" action="/staff/orders/<%= o.id %>/update"><input type="hidden" name="return_to" value="/staff/orders?filter=<%= encodeURIComponent(filter) %>"><button name="action" value="accept">Annehmen</button></form>
+      <% } %>
+      <% if(o.payment_status!=='Paid'&&hasPermission('can_mark_paid')&&o.status!=='Denied'&&o.payment_method!=='Bei Lieferung'&&o.payment_method!=='Guthaben'){ %>
+        <% if(o.payment_method==='PayPal'&&isOwner){ %>
+          <form method="post" action="/staff/orders/<%= o.id %>/paypal-paid" onsubmit="return confirm('Hast du den vollständigen PayPal-Betrag wirklich erhalten? Die Bestellung wird dabei automatisch angenommen.')"><button>Als bezahlt markieren</button></form>
+        <% } else if(o.payment_method!=='PayPal'){ %>
+          <form method="post" action="/staff/orders/<%= o.id %>/update" onsubmit="return confirm('Zahlung wirklich bestätigen? Die Bestellung wird automatisch angenommen.')"><input type="hidden" name="return_to" value="/staff/orders?filter=<%= encodeURIComponent(filter) %>"><input type="hidden" name="payment_status" value="Paid"><button>Zahlung bestätigen</button></form>
+        <% } %>
+      <% } %>
+      <% if(isOwner&&o.status==='Denied'&&o.refund_required){ %><form method="post" action="/staff/orders/<%= o.id %>/refund-confirmed" onsubmit="return confirm('Hast du den Betrag von <%= money(o.total_cents) %> wirklich an den Kunden zurückgezahlt?')"><button>Rückzahlung als erledigt markieren</button></form><% } %>
+      <% if(hasPermission('can_edit_orders')&&o.status!=='Denied'&&o.delivery_status!=='Delivered'){ %>
+        <details class="deny-box">
+          <summary class="btn danger">Ablehnen<%= o.payment_status==='Paid'?' & Rückzahlung vormerken':'' %></summary>
+          <form method="post" action="/staff/orders/<%= o.id %>/update" class="deny-popover stack" onsubmit="return confirm('Bestellung wirklich ablehnen? Reservierter Bestand wird automatisch zurückgebucht.')">
+            <input type="hidden" name="action" value="deny"><input type="hidden" name="return_to" value="/staff/orders?filter=<%= encodeURIComponent(filter) %>">
+            <h3>Ablehnungsgrund</h3>
+            <textarea name="denial_reason" maxlength="1000" required placeholder="Erkläre dem Kunden kurz und verständlich, warum die Bestellung abgelehnt wird."></textarea>
+            <% if(o.payment_status==='Paid'){ %><p><b>Wichtig:</b> Die Zahlung muss anschließend außerhalb der Website an den Kunden zurückgezahlt werden.</p><% } %>
+            <button class="danger">Ablehnung senden</button>
+          </form>
+        </details>
+      <% } %>
+    </div>
+    <small>Bestand wird bei einer Ablehnung automatisch zurückgebucht. Ein separates Löschen ist nicht nötig.</small>
+  </footer>
+</article>
+<% }) %>
+</div>
+<%- include('layout-bottom') %>

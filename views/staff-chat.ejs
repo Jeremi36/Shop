@@ -1,0 +1,22 @@
+<%- include('layout-top') %>
+<div class="section-head"><div><span class="eyebrow">Interne Kommunikation</span><h1>Staff-Chat</h1><p class="muted">Nur für Mitarbeiter sichtbar. Teile Updates, Bilder und direkte Erwähnungen.</p></div><a class="btn secondary" href="/staff">Zur Mitarbeiterübersicht</a></div>
+<div class="staff-chat-panel">
+  <section class="panel staff-chat-stream">
+    <% if(!(messages||[]).length){ %><p class="muted">Noch keine Nachrichten vorhanden.</p><% } %>
+    <% (messages||[]).forEach(m=>{ %><article class="staff-chat-message"><span class="staff-chat-avatar"><%= (m.full_name||'?').charAt(0).toUpperCase() %></span><div class="staff-chat-bubble"><header><b><%= m.full_name %> · <%= roleLabel(m.role) %></b><small><%= new Date(m.created_at).toLocaleString('de-DE') %></small></header><% if(m.body){ %><p><%= m.body %></p><% } %><% if(m.image_url){ %><a href="<%= m.image_url %>" target="_blank" rel="noopener"><img class="staff-chat-image" src="<%= m.image_url %>" alt="Geteiltes Bild von <%= m.full_name %>"></a><% } %></div></article><% }) %>
+    <span id="staff-chat-bottom"></span>
+  </section>
+  <form class="panel stack staff-chat-compose" method="post" action="/staff/chat/messages" enctype="multipart/form-data">
+    <input type="hidden" name="return_to" value="/staff/chat">
+    <h2>Neue Nachricht</h2>
+    <textarea name="body" maxlength="4000" placeholder="Nachricht schreiben …"></textarea>
+    <label>Mitarbeiter erwähnen<select id="mention-select"><option value="">Niemanden auswählen</option><% (staffUsers||[]).forEach(st=>{ %><option value="@<%= st.full_name %>"><%= st.full_name %> · <%= roleLabel(st.role) %></option><% }) %></select></label>
+    <label>Bild hochladen<input type="file" name="image" accept="image/png,image/jpeg,image/webp,image/gif"></label>
+    <p class="mention-hint">Erwähnte Mitarbeiter erhalten eine Mitteilung. Nachricht oder Bild ist erforderlich.</p>
+    <button>Senden</button>
+  </form>
+</div>
+<script>
+(() => { const select=document.getElementById('mention-select'), text=document.querySelector('.staff-chat-compose textarea[name="body"]'); if(!select||!text)return; select.addEventListener('change',()=>{if(!select.value)return; const prefix=text.value&& !text.value.endsWith(' ')?' ':''; text.value+=prefix+select.value+' '; text.focus(); select.value='';}); })();
+</script>
+<%- include('layout-bottom') %>

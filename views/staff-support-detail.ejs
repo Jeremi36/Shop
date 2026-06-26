@@ -1,0 +1,35 @@
+<%- include('layout-top') %>
+<div class="section-head"><div><span class="eyebrow">Support #<%= conversation.conversation_no %></span><h1><%= conversation.subject||conversation.category %></h1></div><a class="btn secondary" href="/staff/support">← Alle Anfragen</a></div>
+
+<div class="support-detail-layout">
+  <aside class="panel support-info-card">
+    <h2>Anfrageinformationen</h2>
+    <div class="support-info-list">
+      <div class="summary-field"><span>Thema</span><strong><%= conversation.subject||conversation.category %></strong><br><small><%= conversation.category %></small></div>
+      <div class="summary-field"><span>Kunde</span><strong><%= conversation.customer_name %></strong><% if(hasPermission('can_view_customer_email')){ %><br><a href="mailto:<%= conversation.customer_email %>"><%= conversation.customer_email %></a><% } %></div>
+      <div class="summary-field"><span>Status</span><span class="status-badge <%= conversation.status==='closed'?'green':(conversation.status==='waiting_staff'?'orange':'blue') %>"><%= supportStatusDe(conversation.status) %></span></div>
+      <div class="summary-field"><span>Zugewiesen</span><strong><%= conversation.staff_name||'Noch nicht zugeteilt' %></strong></div>
+    </div>
+    <% if(isOwner){ %><form method="post" action="/staff/support/<%= conversation.id %>/assign" class="stack"><label>Mitarbeiter<select name="assigned_staff_id"><option value="">Keine Zuteilung</option><% staffUsers.forEach(st=>{ %><option value="<%= st.id %>" <%= conversation.assigned_staff_id===st.id?'selected':'' %>><%= st.full_name %></option><% }) %></select></label><button>Zuteilung speichern</button></form><% } %>
+    <form method="post" action="/staff/support/<%= conversation.id %>/status" class="stack" style="margin-top:1rem"><label>Bearbeitungsstatus<select name="status"><option value="open" <%= conversation.status==='open'?'selected':'' %>>Offen</option><option value="waiting_staff" <%= conversation.status==='waiting_staff'?'selected':'' %>>Wartet auf Mitarbeiter</option><option value="waiting_customer" <%= conversation.status==='waiting_customer'?'selected':'' %>>Wartet auf Kunden</option><option value="closed" <%= conversation.status==='closed'?'selected':'' %>>Geschlossen</option></select></label><button class="secondary">Status speichern</button></form>
+  </aside>
+
+  <section class="panel support-conversation-card">
+    <div class="section-head"><div><h2>Konversation</h2><p class="muted"><%= messages.length %> Nachricht<%= messages.length===1?'':'en' %></p></div></div>
+    <div class="support-thread">
+      <% if(!messages.length){ %><p class="muted">Noch keine Nachrichten.</p><% } %>
+      <% messages.forEach(m=>{ const staffMessage=['owner','co_owner','senior_staff','junior_staff','new_staff'].includes(m.role); %><article class="support-msg <%= staffMessage?'staff':'' %>"><b><%= m.full_name||'System' %><% if(m.role){ %> · <%= roleLabel(m.role) %><% } %></b><p><%= m.body %></p><small><%= new Date(m.created_at).toLocaleString('de-DE') %></small></article><% }) %>
+    </div>
+    <% if(conversation.status!=='closed'){ %><form method="post" action="/staff/support/<%= conversation.id %>/message" class="stack" style="margin-top:1rem"><textarea name="message" required maxlength="2000" placeholder="Antwort an den Kunden schreiben"></textarea><button>Antwort senden</button></form><% } else { %><p class="notice">Diese Unterhaltung ist geschlossen. Ändere links den Status, um erneut zu antworten.</p><% } %>
+  </section>
+</div>
+
+<section class="panel support-tools">
+  <div class="section-head"><div><h2>Kundenwerkzeuge</h2><p class="muted">Administrative Funktionen für diese Supportanfrage.</p></div><div><b>Freigabe:</b> <%= verificationLabel(conversation.verification_level) %> · <b>Guthaben:</b> <%= money(conversation.credit_cents) %></div></div>
+  <div class="support-tool-grid">
+    <% if(hasPermission('can_verify_age')){ %><div class="support-tool-card"><h3>Altersfreigabe</h3><form method="post" action="/staff/support/<%= conversation.id %>/verification" class="stack"><select name="verification_level"><option value="0" <%= Number(conversation.verification_level)===0?'selected':'' %>>Nicht freigegeben</option><option value="16" <%= Number(conversation.verification_level)===16?'selected':'' %>>16+</option><option value="18" <%= Number(conversation.verification_level)===18?'selected':'' %>>18+</option></select><button>Freigabe setzen</button></form></div><% } %>
+    <% if(hasPermission('can_adjust_credit')){ %><div class="support-tool-card"><h3>Guthaben anpassen</h3><form method="post" action="/staff/support/<%= conversation.id %>/credit" class="stack"><input name="amount" placeholder="z. B. 5,00 oder −2,00"><input name="note" placeholder="Begründung"><button>Guthaben ändern</button></form></div><% } %>
+    <% if(hasPermission('can_ban_users')){ %><div class="support-tool-card"><h3>Konto beschränken</h3><form method="post" action="/staff/support/<%= conversation.id %>/suspend" class="stack"><label>Temporär bis<input type="datetime-local" name="until"></label><input name="reason" placeholder="Grund"><button class="danger">Temporäre Sperre setzen/aufheben</button></form><form method="post" action="/staff/support/<%= conversation.id %>/ban" class="stack" style="margin-top:.75rem"><input name="reason" placeholder="Grund für Kontosperre"><div class="inline"><button class="danger" name="banned" value="true">Sperren</button><button class="secondary" name="banned" value="false">Entsperren</button></div></form></div><% } %>
+  </div>
+</section>
+<%- include('layout-bottom') %>

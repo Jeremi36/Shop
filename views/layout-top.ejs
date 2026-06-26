@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#102a6b">
+  <title><%= title %> · Premium Shop</title>
+  <link rel="icon" type="image/svg+xml" href="/public/favicon.svg">
+  <link rel="stylesheet" href="/public/css/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main-content">Zum Inhalt springen</a>
+<div class="announcement-bar">
+  <span>Lokaler Premium Shop in Amberg</span>
+  <span class="announcement-divider">•</span>
+  <span>Persönliche Übergabe</span>
+  <span class="announcement-divider">•</span>
+  <span>Direkter Kundenservice</span>
+</div>
+<header class="site-header">
+  <div class="header-main">
+    <button class="menu-button icon-button" id="menu-open" type="button" aria-label="Menü öffnen" aria-controls="site-drawer" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="brand" href="/" aria-label="Premium Shop Startseite">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64"><rect width="64" height="64" rx="16"/><path d="M18 24h28l-2.7 25H20.7L18 24Z"/><path d="M25 25v-4a7 7 0 0 1 14 0v4"/></svg>
+      </span>
+      <span><strong>Premium</strong><small>SHOP</small></span>
+    </a>
+    <form class="header-search" method="get" action="/" role="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/></svg>
+      <input name="q" value="<%= searchQuery || '' %>" placeholder="Produkte und Kategorien durchsuchen" aria-label="Shop durchsuchen">
+      <button type="submit">Suchen</button>
+    </form>
+    <div class="header-actions">
+      <% if (user) { %>
+        <% if (isCustomer) { %>
+          <a class="cart-summary" href="/cart" aria-label="Warenkorb mit <%= cartCount %> Artikeln, Summe <%= money(cartTotalCents) %>">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h2l2 11h10l2-8H6M9 20h.01M17 20h.01"/></svg>
+            <span><small><%= cartCount %> Artikel</small><strong><%= money(cartTotalCents) %></strong></span>
+          </a>
+        <% } else { %>
+          <a class="header-staff-link" href="/staff"><span>Mitarbeiterbereich</span><% if(staffActionCount){ %><b><%= staffActionCount %></b><% } %></a>
+        <% } %>
+        <a class="account-button" href="/account" aria-label="Mein Konto">
+          <span class="account-avatar"><%= (user.full_name||user.email||'?').trim().charAt(0).toUpperCase() %></span>
+          <span class="account-copy"><small><%= roleLabel(user.role) %></small><strong><%= (user.full_name||'Mein Konto').split(' ')[0] %></strong></span>
+        </a>
+      <% } else { %>
+        <a class="text-link header-login" href="/login">Einloggen</a>
+        <a class="btn header-register" href="/register">Registrieren</a>
+      <% } %>
+    </div>
+  </div>
+  <nav class="header-nav" aria-label="Hauptnavigation">
+    <a class="<%= originalUrl==='/' || originalUrl.startsWith('/?') ? 'active':'' %>" href="/">Produkte</a>
+    <a class="<%= originalUrl.startsWith('/gutschein') ? 'active':'' %>" href="/gutschein">Gutscheine</a>
+    <a class="<%= originalUrl.startsWith('/bewertungen') ? 'active':'' %>" href="/bewertungen">Bewertungen</a>
+    <% if (user && isCustomer) { %>
+      <a class="<%= originalUrl.startsWith('/orders') ? 'active':'' %>" href="/orders">Meine Bestellungen</a>
+      <button class="nav-support-button" type="button" data-support-open>Kundenservice</button>
+      <a href="/benachrichtigungen">Mitteilungen <% if(notifications){ %><span class="nav-badge"><%= notifications %></span><% } %></a>
+    <% } %>
+    <% if (user && isStaff) { %>
+      <a class="<%= originalUrl.startsWith('/staff') ? 'active':'' %>" href="/staff">Mitarbeiterübersicht <% if(staffActionCount){ %><span class="nav-badge">!</span><% } %></a>
+      <a href="/staff/chat">Staff-Chat</a>
+      <a href="/benachrichtigungen">Mitteilungen <% if(notifications){ %><span class="nav-badge"><%= notifications %></span><% } %></a>
+    <% } %>
+  </nav>
+</header>
+
+<div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+<aside class="site-drawer" id="site-drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <span class="drawer-title">Menü</span>
+    <button class="icon-button drawer-close" id="menu-close" type="button" aria-label="Menü schließen">×</button>
+  </div>
+  <div class="drawer-scroll">
+    <section class="drawer-section">
+      <h2>Shop</h2>
+      <a href="/">Alle Produkte</a>
+      <% (navCategories||[]).forEach(c=>{ %>
+        <a href="<%= String(c.name).toLowerCase()==='gutschein' ? '/gutschein' : '/?kategorie='+encodeURIComponent(c.id) %>"><%= c.name %></a>
+      <% }) %>
+      <a href="/bewertungen">Bewertungen</a>
+    </section>
+    <% if (user && isCustomer) { %>
+      <section class="drawer-section">
+        <h2>Mein Einkauf</h2>
+        <a href="/cart">Warenkorb <span><%= cartCount %> · <%= money(cartTotalCents) %></span></a>
+        <a href="/orders">Meine Bestellungen</a>
+        <a href="/account">Konto &amp; Guthaben <span><%= money(creditCents) %></span></a>
+        <button type="button" data-support-open>Kundenservice</button>
+      </section>
+    <% } %>
+    <% if (user && isStaff) { %>
+      <section class="drawer-section">
+        <h2>Mitarbeiter</h2>
+        <a href="/staff">Mitarbeiterübersicht <span>alle Werkzeuge</span></a>
+        <% if(hasPermission('can_manage_orders')){ %><a href="/staff/orders?filter=Placed">Bestellungen</a><% } %>
+        <a href="/staff/chat">Staff-Chat</a>
+        <% if(hasPermission('can_view_products')){ %><a href="/staff/products">Produktverwaltung</a><% } %>
+        <% if(hasPermission('can_propose_products')){ %><a href="/staff/product-proposals">Produktvorschläge</a><% } %>
+        <% if(hasPermission('can_manage_gift_cards')){ %><a href="/staff/gift-cards">Gutscheine verwalten</a><% } %>
+        <% if(hasPermission('can_manage_discounts')){ %><a href="/staff/discount-codes">Rabattcodes</a><% } %>
+        <% if(hasPermission('can_manage_users')||hasPermission('can_ban_users')||hasPermission('can_verify_age')){ %><a href="/staff/customers">Nutzerverwaltung</a><% } %>
+        <% if(hasPermission('can_view_profit')){ %><a href="/staff/profit">Profitübersicht</a><% } %>
+        <% if(hasPermission('can_change_staff_rank')){ %><a href="/staff/permissions">Mitarbeiterrollen</a><% } %>
+        <% if(isOwner){ %><a href="/staff/settings">Shop-Einstellungen</a><a href="/staff/audit">Audit-Protokoll</a><% } %>
+      </section>
+    <% } %>
+    <section class="drawer-section">
+      <h2>Service &amp; Rechtliches</h2>
+      <a href="/legal/lieferung">Lieferung &amp; Übergabe</a>
+      <a href="/legal/zahlung">Zahlungsinformationen</a>
+      <a href="/legal/kontakt">Kontakt</a>
+      <a href="/legal/datenschutz">Datenschutz</a>
+    </section>
+    <% if(user){ %>
+      <form method="post" action="/logout" class="drawer-logout"><button class="secondary" type="submit">Abmelden</button></form>
+    <% } %>
+  </div>
+</aside>
+<main class="wrap" id="main-content">

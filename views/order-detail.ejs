@@ -1,0 +1,103 @@
+<%- include('layout-top') %>
+<% const eventNames={placed:'Bestellung aufgegeben',message:'Nachricht geschrieben',status_update:'Status geändert',meeting_proposed:'Treffpunkt vorgeschlagen',meeting_confirmed:'Treffpunkt bestätigt',meeting_rejected:'Treffpunkt abgelehnt',meeting_counter:'Gegenvorschlag gesendet',review:'Bewertung gespeichert',assigned:'Zuteilung geändert',paypal_paid:'PayPal-Zahlung bestätigt',refund_confirmed:'Rückzahlung bestätigt'}; %>
+<% const badgeClass=v=>v==='Denied'?'red':(v==='Paid'||v==='Delivered'?'green':(v==='Placed'||v==='Unpaid'?'orange':(v==='Delivery in Progress'?'purple':'blue'))); %>
+<div class="section-head">
+  <div><span class="eyebrow"><%= isStaff?'Bestellverwaltung':'Meine Bestellung' %></span><h1><%= orderReference(order) %></h1><p class="muted">Aufgegeben am <%= new Date(order.created_at).toLocaleString('de-DE') %></p></div>
+  <a class="btn secondary" href="<%= isStaff?'/staff/orders':'/orders' %>">← Zur Übersicht</a>
+</div>
+
+<div class="order-overview-grid">
+  <section class="panel order-summary-card">
+    <div class="order-summary-top">
+      <div><h2>Bestelldetails</h2><p class="muted">Alle wichtigen Informationen kompakt zusammengefasst.</p></div>
+      <div class="status-row"><span class="status-badge <%= badgeClass(order.status) %>"><%= statusDe('status',order.status) %></span><span class="status-badge <%= badgeClass(order.payment_status) %>"><%= statusDe('payment_status',order.payment_status) %></span><span class="status-badge <%= badgeClass(order.delivery_status) %>"><%= statusDe('delivery_status',order.delivery_status) %></span><% if(order.refund_required){ %><span class="status-badge red">Rückzahlung offen</span><% } else if(order.refund_confirmed_at){ %><span class="status-badge green">Rückzahlung erledigt</span><% } %></div>
+    </div>
+    <div class="order-summary-list">
+      <% if(isStaff){ %><div class="summary-field"><span>Kunde</span><strong><%= order.full_name %></strong><% if(hasPermission('can_view_customer_email')){ %><br><a href="mailto:<%= order.email %>"><%= order.email %></a><% } %></div><% } %>
+      <div class="summary-field"><span>Bestellnummer</span><strong><%= orderReference(order) %></strong></div>
+      <div class="summary-field"><span>Zugewiesen</span><strong><%= order.assigned_staff_name||'Noch nicht zugeteilt' %></strong></div>
+      <div class="summary-field"><span>Zahlungsart</span><strong><%= order.payment_method %></strong></div>
+      <div class="summary-field"><span>Zahlbetrag</span><strong><%= money(order.total_cents) %></strong></div>
+      <div class="summary-field"><span>Vorbereitung</span><strong><%= items.filter(i=>i.prepared).length %> / <%= items.length %> Positionen</strong></div>
+    </div>
+    <% if(order.status==='Denied'&&order.denial_reason){ %><div class="error"><b>Ablehnungsgrund:</b><br><%= order.denial_reason %><% if(order.refund_required){ %><br><small>Die Rückzahlung über <%= money(order.total_cents) %> ist noch offen.</small><% } else if(order.refund_confirmed_at){ %><br><small>Die Rückzahlung wurde am <%= new Date(order.refund_confirmed_at).toLocaleString('de-DE') %> als erledigt bestätigt.</small><% } %></div><% } %>
+    <% if(order.meeting_location||order.meeting_at||order.meeting_note){ %>
+      <div class="notice"><b>Treffpunktstatus:</b> <%= ({none:'Noch offen',proposed:'Vorgeschlagen',confirmed:'Bestätigt',rejected:'Abgelehnt',customer_proposed:'Gegenvorschlag des Kunden'}[order.meeting_status]||order.meeting_status) %><br><b>Ort:</b> <%= order.meeting_location||'–' %><br><b>Zeit:</b> <%= order.meeting_at?new Date(order.meeting_at).toLocaleString('de-DE'):'–' %><% if(order.meeting_note){ %><br><b>Hinweis:</b> <%= order.meeting_note %><% } %></div>
+    <% } %>
+    <% if(isStaff&&hasPermission('can_view_customer_email')){ %><div class="address-card"><%= order.address_snapshot %></div><% } %>
+  </section>
+
+  <section class="panel order-timeline-card">
+    <h2>Bestellverlauf</h2>
+    <div class="timeline compact-timeline">
+      <% if(!(events||[]).length){ %><p class="muted">Noch keine Ereignisse vorhanden.</p><% } %>
+      <% (events||[]).slice().reverse().forEach(e=>{ %><div class="timeline-item"><b><%= eventNames[e.event_type]||e.event_type %></b><br><small><%= new Date(e.created_at).toLocaleString('de-DE') %> · <%= e.full_name||'System' %></small><% if(e.note){ %><p><%= e.note %></p><% } %></div><% }) %>
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="section-head"><div><h2>Artikel</h2><p class="muted"><%= items.length %> Bestellposition<%= items.length===1?'':'en' %></p></div></div>
+  <div class="table-wrap"><table class="order-items-table"><thead><tr><% if(isStaff&&hasPermission('can_edit_orders')){ %><th>Vorbereitet</th><% } %><th>Produkt</th><th>Sorte</th><th>Menge</th><th>Einzelpreis</th><th>Summe</th><% if(isStaff&&hasPermission('can_view_staff_notes')){ %><th>Interne Notiz</th><% } %><% if(isStaff&&hasPermission('can_edit_orders')){ %><th>Bearbeiten</th><% } %></tr></thead><tbody>
+  <% items.forEach(i=>{ const unit=Math.round(i.unit_price_cents*(100-i.discount_percent)/100), note=i.current_staff_note||i.staff_note_snapshot||''; %><tr>
+    <% if(isStaff&&hasPermission('can_edit_orders')){ %><td><form method="post" action="/staff/order-items/<%= i.id %>/prepared"><label class="tiny legal-check"><input type="checkbox" name="prepared" <%= i.prepared?'checked':'' %> onchange="this.form.submit()"> fertig</label></form></td><% } %>
+    <td><strong><%= i.product_name %></strong> <% if(i.discount_percent){ %><span class="sale">−<%= i.discount_percent %>%</span><% } %></td><td><%= i.variant_name||i.variety||'–' %></td><td><%= i.quantity %></td><td><%= money(unit) %></td><td><strong><%= money(unit*i.quantity) %></strong></td>
+    <% if(isStaff&&hasPermission('can_view_staff_notes')){ %><td><% if(note){ %><div class="staff-note"><%= note %></div><% } else { %><span class="muted">Keine Notiz</span><% } %></td><% } %>
+    <% if(isStaff&&hasPermission('can_edit_orders')){ %><td><% if(order.delivery_status!=='Delivered'&&order.status!=='Denied'){ %><form method="post" action="/staff/order-items/<%= i.id %>/update" class="stack compact"><input name="quantity" type="number" min="1" value="<%= i.quantity %>" aria-label="Menge"><input name="unit_price" value="<%= (i.unit_price_cents/100).toFixed(2).replace('.',',') %>" aria-label="Einzelpreis"><button>Ändern</button></form><form method="post" action="/staff/order-items/<%= i.id %>/delete" onsubmit="return confirm('Artikel aus der Bestellung entfernen?')"><button class="danger compact">Entfernen</button></form><% } else { %><span class="muted">Abgeschlossen</span><% } %></td><% } %>
+  </tr><% }) %></tbody></table></div>
+</section>
+
+<section class="panel order-totals">
+  <h2>Zahlungsübersicht</h2>
+  <% if(isStaff){ %>
+    <div class="order-total-line grand"><span><%= order.payment_status==='Paid'?'Bestätigter Zahlbetrag':'Offener Zahlbetrag' %></span><strong><%= money(order.total_cents) %></strong></div>
+    <p class="muted">Für Mitarbeiter wird nur der tatsächlich zu zahlende beziehungsweise bestätigte Betrag angezeigt.</p>
+  <% } else { %>
+    <% if(order.discount_cents>0){ %><div class="order-total-line"><span>Rabattcode <%= order.discount_code||'' %></span><strong>−<%= money(order.discount_cents) %></strong></div><% } %>
+    <div class="order-total-line"><span>Ursprünglicher Preis</span><strong><%= money(order.original_total_cents||(order.total_cents+(order.credit_used_cents||0))) %></strong></div>
+    <% if((order.credit_used_cents||0)>0){ %><div class="order-total-line"><span>Verwendetes Guthaben</span><strong>−<%= money(order.credit_used_cents||0) %></strong></div><% } %>
+    <% if(order.cashback_awarded_cents>0){ %><div class="order-total-line"><span>OG-Cashback</span><strong class="positive">+<%= money(order.cashback_awarded_cents) %></strong></div><% } %>
+    <div class="order-total-line grand"><span>Zu zahlen</span><strong><%= money(order.total_cents) %></strong></div>
+    <% if(order.credit_refunded_at){ %><p class="success">Das verwendete Guthaben wurde zurückerstattet.</p><% } %>
+  <% } %>
+</section>
+
+<% if(order.payment_method==='PayPal'){ %>
+<section class="panel">
+  <div class="section-head"><div><h2>PayPal-Zahlung</h2><p class="muted">Bestellnummer <%= orderReference(order) %> · Betrag <%= money(order.total_cents) %></p></div><span class="status-badge <%= badgeClass(order.payment_status) %>"><%= statusDe('payment_status',order.payment_status) %></span></div>
+  <% if(order.payment_status==='Paid'){ %><p class="success">Der Zahlungseingang wurde geprüft und bestätigt. Die Bestellung ist automatisch angenommen.</p>
+  <% } else if(isCustomer&&paypalPaymentUrl){ %><div class="payment-guidance"><b>Bitte vor dem Absenden prüfen:</b><ul><li>richtiger PayPal-Empfänger</li><li>genau <%= money(order.total_cents) %></li><li>Bestellnummer <%= orderReference(order) %> als Nachricht</li></ul><p>Die Website erkennt Zahlungen nicht automatisch. Erst nach manueller Prüfung wird der Status geändert.</p></div><p><a class="btn" href="/orders/<%= order.id %>/paypal">Sichere Zahlungsübersicht öffnen</a></p>
+  <% } else if(isStaff){ %><p class="notice">Der PayPal-Zahlungseingang ist noch nicht bestätigt.</p><% if(isOwner){ %><form method="post" action="/staff/orders/<%= order.id %>/paypal-paid" onsubmit="return confirm('Vollständigen PayPal-Zahlungseingang bestätigen? Die Bestellung wird automatisch angenommen.')"><button>Zahlung als erhalten markieren</button></form><% } %><% } %>
+</section>
+<% } %>
+
+<% if(isCustomer&&order.meeting_status==='proposed'){ %><section class="panel"><h2>Treffpunkt bestätigen</h2><div class="inline"><form method="post" action="/orders/<%= order.id %>/meeting-response"><button name="action" value="confirm">Bestätigen</button></form><form method="post" action="/orders/<%= order.id %>/meeting-response"><button name="action" value="reject" class="danger">Ablehnen</button></form></div><details><summary>Gegenvorschlag machen</summary><form method="post" action="/orders/<%= order.id %>/meeting-response" class="stack"><input type="hidden" name="action" value="counter"><input name="meeting_location" placeholder="Anderer Treffpunkt" required><input name="meeting_at" type="datetime-local" required><textarea name="note" placeholder="Nachricht"></textarea><button>Gegenvorschlag senden</button></form></details></section><% } %>
+
+<% if(isOwner&&order.status==='Denied'&&order.refund_required){ %><section class="panel"><h2>Rückzahlung erforderlich</h2><p class="notice">Für diese bereits bezahlte Bestellung müssen <b><%= money(order.total_cents) %></b> außerhalb der Website zurückgezahlt werden.</p><form method="post" action="/staff/orders/<%= order.id %>/refund-confirmed" onsubmit="return confirm('Rückzahlung wirklich als erledigt markieren?')"><button>Rückzahlung als erledigt markieren</button></form></section><% } %>
+
+<% if(isStaff&&hasPermission('can_manage_orders')&&order.status!=='Denied'){ %>
+<section class="panel">
+  <h2>Bestellung bearbeiten</h2>
+  <div class="primary-order-actions">
+    <% if(order.status==='Placed'&&hasPermission('can_accept_orders')&&order.payment_status!=='Paid'){ %><form method="post" action="/staff/orders/<%= order.id %>/update"><input type="hidden" name="return_to" value="/orders/<%= order.id %>"><button name="action" value="accept">Annehmen</button></form><% } %>
+    <% if(order.payment_status!=='Paid'&&hasPermission('can_mark_paid')&&order.payment_method!=='Bei Lieferung'&&order.payment_method!=='Guthaben'){ %>
+      <% if(order.payment_method==='PayPal'&&isOwner){ %><form method="post" action="/staff/orders/<%= order.id %>/paypal-paid" onsubmit="return confirm('Zahlung wirklich erhalten?')"><button>Zahlung bestätigen</button></form>
+      <% } else if(order.payment_method!=='PayPal'){ %><form method="post" action="/staff/orders/<%= order.id %>/update"><input type="hidden" name="return_to" value="/orders/<%= order.id %>"><input type="hidden" name="payment_status" value="Paid"><button>Zahlung bestätigen</button></form><% } %>
+    <% } %>
+    <% if(hasPermission('can_edit_orders')&&order.delivery_status!=='Delivered'){ %><details class="deny-box"><summary class="btn danger">Ablehnen<%= order.payment_status==='Paid'?' & Rückzahlung vormerken':'' %></summary><form method="post" action="/staff/orders/<%= order.id %>/update" class="deny-popover stack" onsubmit="return confirm('Bestellung ablehnen und Bestand automatisch zurückbuchen?')"><input type="hidden" name="action" value="deny"><input type="hidden" name="return_to" value="/orders/<%= order.id %>"><h3>Ablehnungsgrund</h3><textarea name="denial_reason" required maxlength="1000" placeholder="Nachricht an den Kunden"></textarea><% if(order.payment_status==='Paid'){ %><p><b>Rückzahlung nötig:</b> Die bereits bestätigte Zahlung muss außerhalb der Website zurückgezahlt werden.</p><% } %><button class="danger">Ablehnung senden</button></form></details><% } %>
+  </div>
+  <% if(order.status==='Accepted'&&hasPermission('can_mark_delivered')){ %><form method="post" action="/staff/orders/<%= order.id %>/update" class="inline" style="margin-top:1rem"><input type="hidden" name="return_to" value="/orders/<%= order.id %>"><label>Übergabestatus<select name="delivery_status"><option value="Delivery in Progress" <%= order.delivery_status==='Delivery in Progress'?'selected':'' %>>In Bearbeitung</option><option value="Delivered" <%= order.delivery_status==='Delivered'?'selected':'' %>>Übergeben</option></select></label><button>Status speichern</button></form><% } %>
+</section>
+<% } %>
+
+<div class="order-tools-grid">
+<% if(isStaff&&hasPermission('can_manage_meetings')){ %><section class="panel"><h2>Treffpunkt und Uhrzeit</h2><form method="post" action="/staff/orders/<%= order.id %>/meeting" class="stack"><input name="meeting_location" placeholder="z. B. Bahnhof Amberg" value="<%= order.meeting_location||'' %>" required><input name="meeting_at" type="datetime-local" value="<%= order.meeting_at?new Date(order.meeting_at).toISOString().slice(0,16):'' %>" required><textarea name="meeting_note" placeholder="Zusätzliche Nachricht"><%= order.meeting_note||'' %></textarea><button>Vorschlag senden</button></form><% if(order.meeting_status==='customer_proposed'){ %><form method="post" action="/staff/orders/<%= order.id %>/meeting-confirm"><button>Gegenvorschlag bestätigen</button></form><% } %></section><% } %>
+<% if(isStaff&&hasPermission('can_edit_orders')&&order.delivery_status!=='Delivered'&&order.status!=='Denied'){ %><section class="panel"><h2>Artikel hinzufügen</h2><form method="post" action="/staff/orders/<%= order.id %>/add-item" class="stack"><select name="product_id"><% productsForOrder.forEach(p=>{ %><option value="<%= p.id %>"><%= p.name %> · <%= money(p.price_cents) %></option><% }) %></select><input name="quantity" type="number" min="1" value="1"><button>Hinzufügen</button></form></section><% } %>
+<% if(isOwner){ %><section class="panel"><h2>Interne Zusatzkosten</h2><form method="post" action="/staff/orders/<%= order.id %>/costs" class="stack"><input name="extra_cost" value="<%= ((order.extra_cost_cents||0)/100).toFixed(2).replace('.',',') %>" placeholder="Betrag"><input name="extra_cost_note" value="<%= order.extra_cost_note||'' %>" placeholder="Grund"><button>Speichern</button></form></section><% } %>
+</div>
+
+<section class="panel"><div class="section-head"><div><h2>Nachrichten zur Bestellung</h2><p class="muted">Direkte Kommunikation zwischen Kunde und zuständigem Team.</p></div></div><div class="chat"><% if(!messages.length){ %><p class="muted">Noch keine Nachrichten.</p><% } %><% messages.forEach(m=>{ const fromStaff=['owner','co_owner','senior_staff','junior_staff','new_staff'].includes(m.role); %><div class="msg <%= fromStaff?'staff':'' %>"><b><%= m.full_name %> · <%= roleLabel(m.role) %></b><div><%= m.body %></div><small><%= new Date(m.created_at).toLocaleString('de-DE') %></small></div><% }) %></div><form method="post" action="/orders/<%= order.id %>/message" class="stack"><textarea name="body" required maxlength="2000" placeholder="Nachricht schreiben"></textarea><button>Senden</button></form></section>
+<form method="post" action="/orders/<%= order.id %>/archive"><button class="secondary">Bestellung archivieren</button></form>
+
+<% if(isCustomer&&order.delivery_status==='Delivered'){ %><section class="panel"><h2>Bewertung</h2><form method="post" action="/orders/<%= order.id %>/review" class="stack" enctype="multipart/form-data"><select name="rating"><% [5,4,3,2,1].forEach(n=>{ %><option value="<%= n %>" <%= review&&review.rating===n?'selected':'' %>><%= n %> Sterne</option><% }) %></select><textarea name="comment" placeholder="Deine Erfahrung"><%= review?review.comment:'' %></textarea><label>Optional ein Bild anhängen<input type="file" name="image" accept="image/png,image/jpeg,image/webp,image/gif"></label><% if(review&&review.image_url){ %><img class="review-img" src="<%= review.image_url %>" alt="Bild zur Bewertung"><% } %><button>Bewertung speichern</button></form></section><% } %>
+<%- include('layout-bottom') %>
