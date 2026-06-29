@@ -1,0 +1,56 @@
+<% if(user&&isCustomer){ %>
+<button id="support-launcher" class="support-launcher" type="button" aria-label="Kundenservice öffnen">Support</button>
+<section id="support-panel" class="support-panel" hidden aria-label="Kundenservice">
+  <header class="support-head"><div><b>Premium Kundenservice</b><small id="support-subtitle">Direkt mit unserem Team schreiben</small></div><button id="support-close" class="support-x" type="button" aria-label="Schließen">×</button></header>
+  <div id="support-body" class="support-body"><p class="muted">Support wird geladen …</p></div>
+  <form id="support-chat-form" class="support-chat-form" hidden><textarea id="support-chat-input" maxlength="2000" placeholder="Nachricht schreiben …" required></textarea><button>Senden</button></form>
+</section>
+<script>
+(() => {
+  const launcher=document.getElementById('support-launcher'),panel=document.getElementById('support-panel'),close=document.getElementById('support-close'),body=document.getElementById('support-body'),chatForm=document.getElementById('support-chat-form'),chatInput=document.getElementById('support-chat-input'),subtitle=document.getElementById('support-subtitle');
+  if(!launcher||!panel)return;
+  let conversation=null;
+  const statusText={open:'Offen',waiting_customer:'Wartet auf dich',waiting_staff:'Wartet auf Team',closed:'Geschlossen'};
+  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+  const fmt=d=>new Date(d).toLocaleString('de-DE');
+  const isStaffRole=r=>['owner','co_owner','senior_staff','junior_staff','new_staff'].includes(r);
+  async function api(url,options={}){const r=await fetch(url,{headers:{'Content-Type':'application/json','X-Requested-With':'fetch'},...options});const data=await r.json().catch(()=>({error:'Unbekannter Fehler'}));if(!r.ok)throw new Error(data.error||'Fehler');return data;}
+  function showError(err){body.innerHTML=`<p class="error">${esc(err.message||err)}</p><button type="button" id="support-retry">Erneut versuchen</button>`;document.getElementById('support-retry').onclick=loadHome;chatForm.hidden=true;}
+  function openPanel(){panel.hidden=false;loadHome();}
+  document.querySelectorAll('[data-support-open]').forEach(el=>el.addEventListener('click',openPanel));
+  launcher.addEventListener('click',()=>{if(panel.hidden)openPanel();else panel.hidden=true;});close.addEventListener('click',()=>panel.hidden=true);
+
+  async function loadHome(){
+    conversation=null;chatForm.hidden=true;subtitle.textContent='Direkt mit unserem Team schreiben';body.innerHTML='<p class="muted">Unterhaltungen werden geladen …</p>';
+    try{
+      const [list,faq]=await Promise.all([api('/api/support/conversations'),api('/api/support/faqs')]);
+      const conversations=list.conversations||[],open=conversations.filter(c=>c.status!=='closed'),closed=conversations.filter(c=>c.status==='closed');
+      body.innerHTML=`
+        <div class="support-home-actions"><button type="button" id="support-new">Neue Anfrage</button><button type="button" class="secondary" id="support-faq-toggle">Häufige Fragen</button></div>
+        <section><h3>Aktive Unterhaltungen</h3>${open.length?open.map(conversationButton).join(''):'<p class="muted">Keine offene Unterhaltung.</p>'}</section>
+        <section style="margin-top:1rem"><h3>Abgeschlossene Unterhaltungen</h3>${closed.length?closed.map(conversationButton).join(''):'<p class="muted">Noch keine abgeschlossenen Unterhaltungen.</p>'}</section>
+        <section id="support-faq-list" hidden style="margin-top:1rem"><h3>Häufige Fragen</h3>${(faq.faqs||[]).map(f=>`<details class="support-faq"><summary>${esc(f.question)}</summary><p>${esc(f.answer)}</p></details>`).join('')||'<p class="muted">Noch keine FAQs vorhanden.</p>'}</section>`;
+      body.querySelectorAll('[data-conversation-id]').forEach(btn=>btn.onclick=()=>openConversation(btn.dataset.conversationId));
+      document.getElementById('support-new').onclick=showCreate;
+      document.getElementById('support-faq-toggle').onclick=()=>{const el=document.getElementById('support-faq-list');el.hidden=!el.hidden;};
+    }catch(err){showError(err);}
+  }
+  function conversationButton(c){return `<button type="button" class="support-conversation-item" data-conversation-id="${esc(c.id)}"><header><b>#${esc(c.conversation_no)} · ${esc(c.subject||c.category)}</b><span class="status-badge ${c.status==='closed'?'green':(c.status==='waiting_staff'?'orange':'blue')}">${esc(statusText[c.status]||c.status)}</span></header><small>${esc((c.last_message||'Noch keine Nachricht').slice(0,100))}</small><small>Aktualisiert ${esc(fmt(c.updated_at))}</small></button>`;}
+  function showCreate(){
+    conversation=null;chatForm.hidden=true;subtitle.textContent='Neue Supportanfrage';
+    body.innerHTML=`<button type="button" class="link-button" id="support-back">← Zurück</button><h3>Wie können wir helfen?</h3><form id="support-create" class="stack"><label>Thema<select name="category"><option>Allgemein</option><option>Altersfreigabe</option><option>Bestellung</option><option>Sperre oder Bestellung anfechten</option><option>Gutschein oder Guthaben</option></select></label><label>Betreff<input name="subject" maxlength="120" required placeholder="Kurze Zusammenfassung"></label><label>Nachricht<textarea name="message" maxlength="2000" required placeholder="Beschreibe dein Anliegen möglichst genau"></textarea></label><button>Support anfragen</button></form>`;
+    document.getElementById('support-back').onclick=loadHome;
+    document.getElementById('support-create').onsubmit=async e=>{e.preventDefault();const submit=e.submitter;submit.disabled=true;try{renderConversation(await api('/api/support/conversations',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))}));}catch(err){alert(err.message);submit.disabled=false;}};
+  }
+  async function openConversation(id){body.innerHTML='<p class="muted">Unterhaltung wird geladen …</p>';chatForm.hidden=true;try{renderConversation(await api('/api/support/conversations/'+encodeURIComponent(id)));}catch(err){showError(err);}}
+  function renderConversation(data){
+    conversation=data.conversation;subtitle.textContent=`Support #${conversation.conversation_no}`;
+    body.innerHTML=`<div class="support-top-actions"><button type="button" class="link-button" id="support-list-back">← Alle Chats</button>${conversation.status!=='closed'?'<button type="button" class="support-close-chat" id="support-end-chat">Chat beenden</button>':''}</div><div class="support-conversation-meta"><b>${esc(conversation.subject||conversation.category)}</b><span class="status-badge ${conversation.status==='closed'?'green':(conversation.status==='waiting_staff'?'orange':'blue')}">${esc(statusText[conversation.status]||conversation.status)}</span></div><div class="support-messages">${(data.messages||[]).map(m=>`<article class="support-msg ${isStaffRole(m.role)?'staff':''}"><b>${esc(m.full_name||'System')}</b><p>${esc(m.body)}</p><small>${esc(fmt(m.created_at))}</small></article>`).join('')||'<p class="muted">Noch keine Nachrichten.</p>'}</div>`;
+    document.getElementById('support-list-back').onclick=loadHome;
+    const end=document.getElementById('support-end-chat');if(end)end.onclick=async()=>{if(!confirm('Diese Support-Unterhaltung wirklich beenden? Du kannst sie später weiterhin ansehen.'))return;end.disabled=true;try{await api(`/api/support/conversations/${conversation.id}/close`,{method:'POST',body:'{}'});await openConversation(conversation.id);}catch(err){alert(err.message);end.disabled=false;}};
+    chatForm.hidden=conversation.status==='closed';body.scrollTop=body.scrollHeight;
+  }
+  chatForm.addEventListener('submit',async e=>{e.preventDefault();if(!conversation)return;const message=chatInput.value.trim();if(!message)return;const button=e.submitter;button.disabled=true;try{const data=await api(`/api/support/conversations/${conversation.id}/messages`,{method:'POST',body:JSON.stringify({message})});chatInput.value='';renderConversation(data);}catch(err){alert(err.message);}finally{button.disabled=false;}});
+})();
+</script>
+<% } %>

@@ -1,0 +1,89 @@
+<%- include('layout-top') %>
+<section class="store-hero">
+  <div class="store-hero-copy">
+    <span class="eyebrow">Premium Shop · Amberg</span>
+    <h1>Einfach auswählen.<br>Sicher und persönlich erhalten.</h1>
+    <p>Entdecke unsere aktuellen Produkte, bestelle direkt online und stimme Übergabe oder Lieferung bequem mit unserem Team ab.</p>
+    <div class="hero-actions">
+      <a class="btn btn-large" href="#produkte">Produkte entdecken</a>
+      <button class="btn secondary btn-large" type="button" data-support-open>Kundenservice</button>
+    </div>
+    <div class="hero-proof"><span>✓ Transparente Preise</span><span>✓ Direkte Ansprechpartner</span><span>✓ Lokale Übergabe</span></div>
+  </div>
+  <div class="store-hero-visual" aria-hidden="true">
+    <div class="hero-orb hero-orb-one"></div><div class="hero-orb hero-orb-two"></div>
+    <div class="hero-showcase-card card-a"><span>01</span><b>Schnell bestellen</b><small>Produkte, Varianten und Bestand direkt sichtbar</small></div>
+    <div class="hero-showcase-card card-b"><span>02</span><b>Persönlich abstimmen</b><small>Nachrichten und Treffpunkt direkt in der Bestellung</small></div>
+    <div class="hero-showcase-card card-c"><span>03</span><b>Sicher übergeben</b><small>Status und Verlauf jederzeit nachvollziehbar</small></div>
+  </div>
+</section>
+
+<section class="trust-strip" aria-label="Shop-Vorteile">
+  <article><span class="trust-icon">✓</span><div><b>Geprüfter Ablauf</b><small>Jede Bestellung mit nachvollziehbarem Status</small></div></article>
+  <article><span class="trust-icon">↔</span><div><b>Direkte Kommunikation</b><small>Kontakt zu unserem Team ohne Umwege</small></div></article>
+  <article><span class="trust-icon">⌂</span><div><b>Lokal in Amberg</b><small>Übergabe persönlich und abgestimmt</small></div></article>
+  <article><span class="trust-icon">★</span><div><b>Echte Bewertungen</b><small>Bewertungen nach abgeschlossener Bestellung</small></div></article>
+</section>
+
+<section class="catalog-section" id="produkte">
+  <div class="catalog-head">
+    <div><span class="eyebrow">Unser Sortiment</span><h2><%= search ? 'Suchergebnisse für „'+search+'“' : 'Produkte entdecken' %></h2><p><%= products.length %> <%= products.length===1?'Produkt':'Produkte' %> verfügbar</p></div>
+    <form method="get" action="/" class="catalog-sort">
+      <% if(selectedCategory){ %><input type="hidden" name="kategorie" value="<%= selectedCategory %>"><% } %>
+      <% if(search){ %><input type="hidden" name="q" value="<%= search %>"><% } %>
+      <label>Sortieren nach<select name="sort" onchange="this.form.submit()">
+        <option value="created_desc" <%= sort==='created_desc'?'selected':'' %>>Neueste zuerst</option>
+        <option value="price_asc" <%= sort==='price_asc'?'selected':'' %>>Preis aufsteigend</option>
+        <option value="price_desc" <%= sort==='price_desc'?'selected':'' %>>Preis absteigend</option>
+        <option value="name_asc" <%= sort==='name_asc'?'selected':'' %>>Name A–Z</option>
+        <option value="name_desc" <%= sort==='name_desc'?'selected':'' %>>Name Z–A</option>
+        <option value="views_desc" <%= sort==='views_desc'?'selected':'' %>>Meist angesehen</option>
+      </select></label>
+    </form>
+  </div>
+  <div class="category-scroller">
+    <a class="category-pill <%= !selectedCategory ? 'active':'' %>" href="/?sort=<%= encodeURIComponent(sort||'created_desc') %><%= search?'&q='+encodeURIComponent(search):'' %>">Alle Produkte</a>
+    <% categories.filter(c=>String(c.name).toLowerCase()!=='gutschein').forEach(c=>{ %>
+      <a class="category-pill <%= selectedCategory===c.id?'active':'' %>" href="/?kategorie=<%= encodeURIComponent(c.id) %>&sort=<%= encodeURIComponent(sort||'created_desc') %><%= search?'&q='+encodeURIComponent(search):'' %>"><%= c.name %></a>
+    <% }) %>
+    <a class="category-pill gift-pill" href="/gutschein">🎁 Gutschein gestalten</a>
+  </div>
+
+  <% if(!products.length){ %>
+    <section class="empty-state panel"><span>⌕</span><h2>Keine Produkte gefunden</h2><p>Versuche einen anderen Suchbegriff oder öffne wieder das gesamte Sortiment.</p><a class="btn" href="/">Alle Produkte anzeigen</a></section>
+  <% } else { %>
+  <div class="product-grid">
+    <% products.forEach(p=>{ const variants=(p.variants||[]).filter(v=>v.active); const stock=variants.length?variants.reduce((sum,v)=>sum+Number(v.stock||0),0):Number(p.display_stock??p.stock??0); %>
+      <article class="product-card">
+        <a class="product-card-image" href="/produkte/<%= p.id %>">
+          <% if(p.image_url){ %><img src="<%= p.image_url %>" alt="<%= p.name %>" loading="lazy"><% } else { %><div class="product-placeholder"><span>PS</span><small>Produktbild folgt</small></div><% } %>
+          <% if(p.discount_percent>0){ %><span class="discount-badge">−<%= p.discount_percent %>%</span><% } %>
+          <% if(stock<=0 || p.supplier_status==='out_of_stock'){ %><span class="stock-overlay">Nicht auf Lager</span><% } %>
+        </a>
+        <div class="product-card-body">
+          <div class="product-meta"><span><%= p.category_name||'Allgemein' %></span><% if(p.age_level>0){ %><span class="age-badge"><%= p.age_level %>+</span><% } %></div>
+          <h3><a href="/produkte/<%= p.id %>"><%= p.name %></a></h3>
+          <p class="product-description"><%= p.description||'Weitere Informationen findest du auf der Produktseite.' %></p>
+          <% if(variants.length){ %><p class="variant-preview"><b><%= variants.length %> Sorten</b> · <%= variants.slice(0,3).map(v=>v.name).join(', ') %><%= variants.length>3?' …':'' %></p><% } %>
+          <div class="product-card-footer">
+            <div class="product-price"><% if(p.discount_percent>0){ %><small><%= money(p.price_cents) %></small><% } %><strong><%= money(discounted(p)) %></strong><span><%= stock>0 ? stock+' verfügbar' : 'Ausverkauft' %></span></div>
+            <a class="product-detail-arrow" href="/produkte/<%= p.id %>" aria-label="<%= p.name %> ansehen">→</a>
+          </div>
+          <% if(isCustomer){ %>
+            <form method="post" action="/cart/add/<%= p.id %>" class="quick-add-form">
+              <% if(variants.length){ %><select name="variant_id" required><option value="">Sorte auswählen</option><% variants.forEach(v=>{ %><option value="<%= v.id %>" <%= Number(v.stock)<=0?'disabled':'' %>><%= v.name %> · <%= v.stock %> verfügbar</option><% }) %></select><% } %>
+              <div><input type="number" name="quantity" min="1" max="<%= Math.max(1,stock) %>" value="1" aria-label="Menge"><button <%= stock<=0?'disabled':'' %>><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h2l2 11h10l2-8H6M9 20h.01M17 20h.01"/></svg>In den Warenkorb</button></div>
+            </form>
+          <% } else if(!user){ %><a class="btn full-width" href="/login">Zum Kaufen einloggen</a><% } %>
+        </div>
+      </article>
+    <% }) %>
+  </div>
+  <% } %>
+</section>
+
+<section class="service-banner">
+  <div><span class="eyebrow">Noch Fragen?</span><h2>Unser Team hilft dir persönlich weiter.</h2><p>Nutze den Kundenservice für Produktfragen, Bestellungen, Altersfreigaben oder Gutscheine.</p></div>
+  <% if(isCustomer){ %><button class="btn btn-light btn-large" type="button" data-support-open>Support öffnen</button><% } else if(!user){ %><a class="btn btn-light btn-large" href="/login">Einloggen &amp; Support nutzen</a><% } %>
+</section>
+<%- include('layout-bottom') %>

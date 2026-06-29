@@ -1,0 +1,75 @@
+<%- include('layout-top') %>
+<div class="dashboard-intro">
+  <div><span class="eyebrow">Mitarbeiterbereich</span><h1>Willkommen, <%= (user.full_name||'Teammitglied').split(' ')[0] %></h1><p class="muted">Deine wichtigsten Aufgaben und Werkzeuge – nach täglicher Arbeit, Verwaltung und System geordnet.</p></div>
+  <% if(staffActionCount){ %><span class="alert">! <%= staffActionCount %> offene Bestellung<%= staffActionCount===1?'':'en' %></span><% } %>
+</div>
+
+<% if(hasPermission('can_manage_orders')||hasPermission('can_manage_support')){ %>
+<section class="dashboard-section">
+  <div class="dashboard-section-head"><div><h2>Tägliche Arbeit</h2><p>Bestellungen, Kundenanfragen und direkte Teamkommunikation.</p></div></div>
+  <div class="dashboard-grid">
+    <% if(hasPermission('can_manage_orders')){ %>
+      <a class="dashboard-card" href="/staff/orders?filter=Placed"><span class="dashboard-card-icon">N</span><span class="dashboard-card-count"><%= stats.placed||0 %></span><h3>Neue Bestellungen</h3><p>Annehmen, zuweisen oder mit Grund ablehnen.</p></a>
+      <a class="dashboard-card" href="/staff/orders?filter=Accepted"><span class="dashboard-card-icon">✓</span><span class="dashboard-card-count"><%= stats.accepted||0 %></span><h3>In Bearbeitung</h3><p>Vorbereitung, Zahlung und Übergabe verwalten.</p></a>
+      <a class="dashboard-card" href="/staff/orders?filter=Delivered"><span class="dashboard-card-icon">↗</span><span class="dashboard-card-count"><%= stats.delivered||0 %></span><h3>Abgeschlossen</h3><p>Übergebene Bestellungen und Verlauf ansehen.</p></a>
+    <% } %>
+    <% if(hasPermission('can_manage_support')){ %><a class="dashboard-card" href="/staff/support"><span class="dashboard-card-icon">?</span><span class="dashboard-card-count"><%= supportActionCount||0 %></span><h3>Kundensupport</h3><p>Offene Anfragen beantworten und verwalten.</p></a><% } %>
+    <a class="dashboard-card" href="/staff/chat"><span class="dashboard-card-icon">@</span><h3>Staff-Chat</h3><p>Teammitglieder pingen, Bilder teilen und Absprachen festhalten.</p></a>
+  </div>
+</section>
+<% } %>
+
+<% if(hasPermission('can_view_products')||hasPermission('can_propose_products')||hasPermission('can_manage_gift_cards')||hasPermission('can_manage_discounts')){ %>
+<section class="dashboard-section">
+  <div class="dashboard-section-head"><div><h2>Sortiment &amp; Verkauf</h2><p>Produkte, Gutscheine, Preise und Aktionen.</p></div></div>
+  <div class="dashboard-grid">
+    <% if(hasPermission('can_view_products')){ %><a class="dashboard-card" href="/staff/products"><span class="dashboard-card-icon">P</span><span class="dashboard-card-count"><%= stats.products||0 %></span><h3>Produktverwaltung</h3><p><%= hasPermission('can_edit_products')?'Sortiment, Lager und Preise bearbeiten.':'Produkte und interne Informationen ansehen.' %></p></a><% } %>
+    <% if(hasPermission('can_propose_products')){ %><a class="dashboard-card" href="/staff/product-proposals"><span class="dashboard-card-icon">+</span><span class="dashboard-card-count"><%= stats.product_proposals||0 %></span><h3>Produktvorschläge</h3><p>Neue Ideen einreichen oder prüfen.</p></a><% } %>
+    <% if(hasPermission('can_manage_gift_cards')){ %><a class="dashboard-card" href="/staff/gift-cards"><span class="dashboard-card-icon">G</span><h3>Gutscheine</h3><p>Zahlung bestätigen und Gutscheine ausgeben.</p></a><% } %>
+    <% if(hasPermission('can_manage_discounts')){ %><a class="dashboard-card" href="/staff/discount-codes"><span class="dashboard-card-icon">%</span><span class="dashboard-card-count"><%= stats.discount_proposals||0 %></span><h3>Rabattcodes</h3><p>Rabatte erstellen, freigeben und versenden.</p></a><% } %>
+  </div>
+</section>
+<% } %>
+
+<% if(hasPermission('can_manage_users')||hasPermission('can_ban_users')||hasPermission('can_verify_age')||hasPermission('can_view_profit')||hasPermission('can_change_staff_rank')){ %>
+<section class="dashboard-section">
+  <div class="dashboard-section-head"><div><h2>Verwaltung</h2><p>Funktionen für erfahrene Mitarbeiter und Leitung.</p></div></div>
+  <div class="dashboard-grid">
+    <% if(hasPermission('can_manage_users')||hasPermission('can_ban_users')||hasPermission('can_verify_age')){ %><a class="dashboard-card management" href="/staff/customers"><span class="dashboard-card-icon">K</span><span class="dashboard-card-count"><%= stats.premium||0 %></span><h3>Nutzerverwaltung</h3><p>Verifizierung, Ränge, Sperren und Notizen.</p></a><% } %>
+    <% if(hasPermission('can_view_profit')){ %><a class="dashboard-card management" href="/staff/profit"><span class="dashboard-card-icon">€</span><h3>Profitübersicht</h3><p>Umsatz, Kosten und Profit auswerten.</p></a><% } %>
+    <% if(hasPermission('can_change_staff_rank')){ %><a class="dashboard-card management" href="/staff/permissions"><span class="dashboard-card-icon">R</span><span class="dashboard-card-count"><%= stats.staff||0 %></span><h3>Mitarbeiterrollen</h3><p>Ränge und Berechtigungen verwalten.</p></a><% } %>
+  </div>
+</section>
+<% } %>
+
+<% if(isOwner){ %>
+<section class="dashboard-section">
+  <div class="dashboard-section-head"><div><h2>Owner &amp; System</h2><p>Grundlegende Einstellungen und Protokolle.</p></div></div>
+  <div class="dashboard-grid">
+    <a class="dashboard-card system" href="/staff/settings"><span class="dashboard-card-icon">⚙</span><h3>Shop-Einstellungen</h3><p>Registrierung, FAQs und Altersregeln.</p></a>
+    <a class="dashboard-card system" href="/staff/legal"><span class="dashboard-card-icon">§</span><h3>Rechtliche Seiten</h3><p>AGB, Datenschutz und Hinweise pflegen.</p></a>
+    <a class="dashboard-card system" href="/staff/audit"><span class="dashboard-card-icon">A</span><h3>Audit-Protokoll</h3><p>Wichtige Änderungen nachvollziehen.</p></a>
+  </div>
+</section>
+<% } %>
+
+<section class="dashboard-section" id="staff-chat-preview">
+  <div class="dashboard-section-head"><div><h2>Staff-Chat</h2><p>Die letzten Nachrichten aus dem internen Teamkanal.</p></div><a href="/staff/chat">Vollständigen Chat öffnen</a></div>
+  <div class="staff-chat-panel">
+    <section class="panel staff-chat-stream">
+      <% if(!(chatMessages||[]).length){ %><p class="muted">Noch keine Nachrichten. Starte die erste Absprache mit deinem Team.</p><% } %>
+      <% (chatMessages||[]).forEach(m=>{ %><article class="staff-chat-message"><span class="staff-chat-avatar"><%= (m.full_name||'?').charAt(0).toUpperCase() %></span><div class="staff-chat-bubble"><header><b><%= m.full_name %> · <%= roleLabel(m.role) %></b><small><%= new Date(m.created_at).toLocaleString('de-DE') %></small></header><% if(m.body){ %><p><%= m.body %></p><% } %><% if(m.image_url){ %><a href="<%= m.image_url %>" target="_blank" rel="noopener"><img class="staff-chat-image" src="<%= m.image_url %>" alt="Geteiltes Bild"></a><% } %></div></article><% }) %>
+      <span id="staff-chat-bottom"></span>
+    </section>
+    <form class="panel stack staff-chat-compose" method="post" action="/staff/chat/messages" enctype="multipart/form-data">
+      <input type="hidden" name="return_to" value="/staff">
+      <h3>Nachricht senden</h3>
+      <textarea name="body" maxlength="4000" placeholder="Nachricht schreiben oder @Name verwenden …" list="staff-mentions"></textarea>
+      <datalist id="staff-mentions"><% (staffUsers||[]).forEach(st=>{ %><option value="@<%= st.full_name %>"><%= roleLabel(st.role) %></option><% }) %></datalist>
+      <label>Optionales Bild<input type="file" name="image" accept="image/png,image/jpeg,image/webp,image/gif"></label>
+      <p class="mention-hint">Mit @Vollständiger Name kannst du einen Mitarbeiter direkt benachrichtigen.</p>
+      <button>Senden</button>
+    </form>
+  </div>
+</section>
+<%- include('layout-bottom') %>

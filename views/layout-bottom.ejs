@@ -1,0 +1,37 @@
+</main>
+<footer class="site-footer">
+  <div class="footer-grid">
+    <div class="footer-brand">
+      <a class="brand footer-logo" href="/"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 64 64"><rect width="64" height="64" rx="16"/><path d="M18 24h28l-2.7 25H20.7L18 24Z"/><path d="M25 25v-4a7 7 0 0 1 14 0v4"/></svg></span><span><strong>Premium</strong><small>SHOP</small></span></a>
+      <p>Persönlicher, lokaler Einkauf mit direkter Kommunikation und transparenter Übergabe.</p>
+    </div>
+    <div><h2>Shop</h2><a href="/">Produkte</a><a href="/gutschein">Gutscheine</a><a href="/bewertungen">Bewertungen</a></div>
+    <div><h2>Hilfe</h2><a href="/legal/kontakt">Kontakt</a><a href="/legal/lieferung">Lieferung &amp; Übergabe</a><a href="/legal/zahlung">Zahlung</a></div>
+    <div><h2>Rechtliches</h2><a href="/legal/impressum">Impressum</a><a href="/legal/datenschutz">Datenschutz</a><a href="/legal/agb">AGB</a><a href="/legal/widerruf">Widerruf</a></div>
+  </div>
+  <div class="footer-bottom"><span>© <%= new Date().getFullYear() %> Premium Shop</span><span>Entwickelt für einen einfachen und vertrauensvollen Einkauf.</span></div>
+</footer>
+<%- include('support-widget') %>
+<script>
+(() => {
+  const drawer=document.getElementById('site-drawer');
+  const backdrop=document.getElementById('drawer-backdrop');
+  const open=document.getElementById('menu-open');
+  const close=document.getElementById('menu-close');
+  if(!drawer||!backdrop||!open||!close)return;
+  const setOpen=value=>{
+    drawer.classList.toggle('open',value);
+    drawer.setAttribute('aria-hidden',String(!value));
+    open.setAttribute('aria-expanded',String(value));
+    backdrop.hidden=!value;
+    document.body.classList.toggle('drawer-is-open',value);
+  };
+  open.addEventListener('click',()=>setOpen(true));
+  close.addEventListener('click',()=>setOpen(false));
+  backdrop.addEventListener('click',()=>setOpen(false));
+  document.addEventListener('keydown',e=>{if(e.key==='Escape')setOpen(false);});
+  drawer.querySelectorAll('a,[data-support-open]').forEach(el=>el.addEventListener('click',()=>setOpen(false)));
+})();
+</script>
+</body>
+</html>

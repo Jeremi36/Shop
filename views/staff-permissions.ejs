@@ -1,0 +1,8 @@
+<%- include('layout-top') %>
+<h1>Mitarbeiterrollen und Rechte</h1>
+<p class="notice">Die Rechte sind fest an die Rollen gebunden. Dadurch kann ein Mitarbeiter nicht versehentlich einzelne zusätzliche Rechte erhalten.</p>
+<div class="rank-timeline staff-ranks">
+<% staffRankOrder.forEach(r=>{ %><article class="rank-step unlocked"><div class="rank-dot">●</div><div class="rank-card panel"><h2><%= roleLabel(r) %></h2><ul><% (roleBenefits[r]||[]).forEach(b=>{ %><li><%= b %></li><% }) %></ul><details><summary>Technische Berechtigungen</summary><ul><% (rolePermissionPresets[r]||[]).forEach(k=>{ %><li><%= permissionLabels[k]||k %></li><% }) %></ul></details></div></article><% }) %>
+</div>
+<section class="panel"><h2>Aktuelle Mitarbeiter</h2><table><tr><th>Name</th><th>E-Mail-Adresse</th><th>Rolle</th><th>Erstellt</th></tr><% staffUsers.forEach(s=>{ %><tr><td><%= s.full_name %></td><td><%= s.email %></td><td><%= roleLabel(s.role) %></td><td><%= new Date(s.created_at).toLocaleDateString('de-DE') %></td></tr><% }) %></table></section>
+<%- include('layout-bottom') %>

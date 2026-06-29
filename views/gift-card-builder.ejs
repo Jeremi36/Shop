@@ -1,0 +1,28 @@
+<%- include('layout-top') %>
+<div class="section-head"><div><span class="eyebrow">Persönlich schenken</span><h1>Geschenkgutschein gestalten</h1><p class="muted">Wert, Design und persönliche Nachricht frei auswählen.</p></div><a class="btn secondary" href="/">Zurück zum Shop</a></div>
+<section class="store-hero" style="min-height:330px;margin-bottom:1.25rem">
+  <div class="store-hero-copy"><span class="eyebrow">Digitaler Gutschein</span><h1 style="font-size:clamp(2.2rem,4vw,3.6rem)">Ein Geschenk, das immer passt.</h1><p>Nach bestätigter Zahlung wird eine persönliche Gutschein-PDF erstellt – zum Herunterladen oder direkten Versand per E-Mail.</p><div class="hero-proof"><span>✓ Wert frei wählbar</span><span>✓ Persönliche Nachricht</span><span>✓ Mehrere Designs</span></div></div>
+  <div class="store-hero-visual"><div class="hero-orb hero-orb-one"></div><div class="hero-showcase-card card-a"><span>PREMIUM SHOP</span><b>Geschenkgutschein</b><small>Für deine persönliche Nachricht</small></div><div class="hero-showcase-card card-b"><span>FLEXIBEL</span><b><%= money(product.gift_card_min_cents||500) %> bis <%= money(product.gift_card_max_cents||50000) %></b><small>Wert individuell festlegen</small></div></div>
+</section>
+<% if(!user){ %><section class="panel empty-state"><span>🎁</span><h2>Zum Gestalten einloggen</h2><p>Für die Bestellung und spätere Bereitstellung des Gutscheins wird ein Kundenkonto benötigt.</p><a class="btn" href="/login">Einloggen</a></section>
+<% } else if(!isCustomer){ %><p class="notice">Gutscheine können nur über ein Kundenkonto bestellt werden.</p>
+<% } else { %>
+<section class="panel">
+  <div class="section-head"><div><h2>Deinen Gutschein erstellen</h2><p class="muted">Alle Angaben erscheinen später auf der Gutschein-PDF.</p></div><span class="status-badge blue">Schritt 1 von 1</span></div>
+  <form method="post" action="/gift-cards/request" class="stack gift-builder" id="gift-builder">
+    <div class="three">
+      <label>Gutscheinwert in Euro<input name="amount" type="number" min="<%= (product.gift_card_min_cents||500)/100 %>" max="<%= (product.gift_card_max_cents||50000)/100 %>" step="0.01" value="25" required></label>
+      <label>Für wen?<input name="recipient_name" maxlength="120" placeholder="Name des Empfängers" required></label>
+      <label>Von wem?<input name="sender_name" maxlength="120" value="<%= user.full_name||'' %>" required></label>
+    </div>
+    <label>Persönliche Nachricht<textarea name="custom_message" maxlength="500" placeholder="Viel Freude mit deinem Gutschein!"></textarea></label>
+    <fieldset class="gift-themes"><legend>Design auswählen</legend><% [['blau','Blau'],['gold','Gold'],['rosa','Rosa'],['dunkel','Dunkel'],['festlich','Festlich']].forEach((t,i)=>{ %><label class="gift-theme theme-<%= t[0] %>"><input type="radio" name="design_theme" value="<%= t[0] %>" <%= i===0?'checked':'' %>><span><%= t[1] %></span></label><% }) %></fieldset>
+    <fieldset><legend>Ausgabe auswählen</legend><label class="legal-check"><input type="radio" name="delivery_method" value="download" checked data-delivery> PDF nach Bestätigung in meinem Konto herunterladen</label><label class="legal-check"><input type="radio" name="delivery_method" value="email" data-delivery> PDF automatisch an den Empfänger senden</label></fieldset>
+    <label id="gift-email-field" hidden>Empfänger-E-Mail-Adresse<input name="delivery_email" type="email" placeholder="empfaenger@beispiel.de"></label>
+    <div class="payment-guidance"><b>So geht es weiter</b><p>Nach der Anfrage wird die Zahlung geprüft. Erst danach wird der Gutscheincode erzeugt und ausschließlich in der persönlichen PDF bereitgestellt.</p></div>
+    <button class="btn-large">Gutschein zahlungspflichtig anfragen</button>
+  </form>
+</section>
+<script>(()=>{const radios=document.querySelectorAll('[data-delivery]'),field=document.getElementById('gift-email-field'),input=field?.querySelector('input');const sync=()=>{const active=document.querySelector('[name=delivery_method]:checked')?.value==='email';field.hidden=!active;input.required=active;};radios.forEach(r=>r.addEventListener('change',sync));sync();})();</script>
+<% } %>
+<%- include('layout-bottom') %>

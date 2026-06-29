@@ -1,0 +1,24 @@
+<%- include('layout-top') %>
+<% const badgeClass=v=>v==='Denied'?'red':(v==='Paid'||v==='Delivered'?'green':(v==='Placed'||v==='Unpaid'?'orange':(v==='Delivery in Progress'?'purple':'blue'))); %>
+<% const activeOrders=orders.filter(o=>o.delivery_status!=='Delivered'&&o.status!=='Denied'), completedOrders=orders.filter(o=>o.delivery_status==='Delivered'||o.status==='Denied'); %>
+<div class="section-head"><div><span class="eyebrow">Mein Einkauf</span><h1>Meine Bestellungen</h1><p class="muted">Status, Treffpunkt und Nachrichten jederzeit nachvollziehen.</p></div><a class="btn secondary" href="/">Weiter einkaufen</a></div>
+
+<section class="dashboard-section">
+  <div class="dashboard-section-head"><div><h2>Aktive Bestellungen</h2><p><%= activeOrders.length %> laufende Bestellung<%= activeOrders.length===1?'':'en' %></p></div></div>
+  <div class="order-list">
+  <% if(!activeOrders.length){ %><section class="panel empty-state"><span>🛍</span><h2>Keine aktive Bestellung</h2><p>Deine nächste Bestellung erscheint nach dem Absenden hier.</p><a class="btn" href="/">Produkte entdecken</a></section><% } %>
+  <% activeOrders.forEach(o=>{ %><article class="staff-order-card <%= o.status==='Placed'?'is-new':'' %>">
+    <header class="staff-order-head"><div><div class="staff-order-reference"><strong><%= orderReference(o) %></strong><span class="order-date"><%= new Date(o.created_at).toLocaleString('de-DE') %></span></div><div class="status-row"><span class="status-badge <%= badgeClass(o.status) %>"><%= statusDe('status',o.status) %></span><span class="status-badge <%= badgeClass(o.payment_status) %>"><%= statusDe('payment_status',o.payment_status) %></span><span class="status-badge <%= badgeClass(o.delivery_status) %>"><%= statusDe('delivery_status',o.delivery_status) %></span></div></div><a class="btn" href="/orders/<%= o.id %>">Details &amp; Nachrichten</a></header>
+    <div class="staff-order-body" style="grid-template-columns:1.5fr 1fr .7fr"><div class="order-data-block"><span>Artikel</span><strong><%= o.items_text||'–' %></strong></div><div class="order-data-block"><span>Treffpunkt</span><strong><%= o.meeting_location||'Noch offen' %></strong><small><%= o.meeting_at?new Date(o.meeting_at).toLocaleString('de-DE'):'Wird nach der Bestellung abgestimmt' %></small></div><div class="order-data-block order-price"><span>Zahlbetrag</span><strong><%= money(o.total_cents) %></strong><small><%= o.payment_status==='Paid'?'Bestätigt':'Offen' %></small></div></div>
+  </article><% }) %>
+  </div>
+</section>
+
+<section class="dashboard-section">
+  <div class="dashboard-section-head"><div><h2>Abgeschlossen &amp; abgelehnt</h2><p>Dein bisheriger Bestellverlauf.</p></div></div>
+  <div class="order-list">
+  <% if(!completedOrders.length){ %><p class="muted">Noch keine abgeschlossenen Bestellungen.</p><% } %>
+  <% completedOrders.forEach(o=>{ %><article class="staff-order-card"><header class="staff-order-head"><div><div class="staff-order-reference"><strong><%= orderReference(o) %></strong><span class="order-date"><%= new Date(o.created_at).toLocaleString('de-DE') %></span></div><div class="status-row"><span class="status-badge <%= badgeClass(o.status) %>"><%= statusDe('status',o.status) %></span><span class="status-badge <%= badgeClass(o.delivery_status) %>"><%= statusDe('delivery_status',o.delivery_status) %></span></div></div><a class="btn secondary" href="/orders/<%= o.id %>">Öffnen</a></header><div class="staff-order-body" style="grid-template-columns:1fr auto"><div class="order-data-block"><span>Artikel</span><strong><%= o.items_text||'–' %></strong></div><div class="order-data-block order-price"><span>Gesamt</span><strong><%= money(o.total_cents) %></strong></div></div></article><% }) %>
+  </div>
+</section>
+<%- include('layout-bottom') %>
